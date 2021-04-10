@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -e
+
+docker build \
+    -f Dockerfile-release \
+    -t bigdict-release:latest \
+    .
+
+rm -rf $(pwd)/build
+mkdir -p $(pwd)/build
+
+docker run \
+    --rm \
+    -e HOSTUSER=$(id -u):$(id -g) \
+    -v $(pwd)/build:/build \
+    bigdict-release:latest \
+    bash /src/build-wheels.sh
+

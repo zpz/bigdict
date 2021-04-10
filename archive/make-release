@@ -1,0 +1,44 @@
+#!/bin/bash
+
+set -e
+
+TINY=zppz/tiny:21.01.02
+
+branch=$(git branch --show-current)
+if [[ ${branch} != master ]] && [[ ${branch} != main ]]; then
+    >&2 echo Please switch to branch '"master"' or '"main"' to make a release
+    exit 1
+fi
+
+PYVER=3.8
+
+docker build \
+    --build-arg PYTHON_VERSION=${PYVER} \
+    --target release-test \
+    -t bigdict-release-test:latest \
+    . || exit 1
+
+echo
+
+docker run --rm bigdict-release-test:latest \
+    py.test \
+        --log-cli-level info \
+        --cov=bigdict \
+        --cov-report term-missing \
+        --cov-fail-under 50 \
+        /tmp/bigdict-dist/tests || exit 1
+
+echo
+
+version=$(docker run --rm ${TINY} make-date-version)
+
+docker build \
+    --build-arg PYTHON_VERSION=${PYVER} \
+    --target release \
+    -t bigdict-installer:${version} \
+    . || exit 1
+docker rmi bigdict-release-test:latest || exit 1
+
+
+echo
+echo Successfully created release bigdict-installer:${version}

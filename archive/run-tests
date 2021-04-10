@@ -1,0 +1,74 @@
+#!/bin/bash
+
+PYVER=3.8
+TESTIMG=bigdict-test:latest
+
+docker build \
+    --build-arg PYTHON_VERSION=${PYVER} \
+    --target test \
+    -t ${TESTIMG} \
+    . || exit 1
+
+
+if [ "$#" -gt 0 ]; then
+    # Run one specific test file.
+    docker run \
+        ${TESTIMG} \
+        py.test \
+            -s -v \
+            --showlocals \
+            --log-cli-level debug \
+            /opt/bigdict/tests/$@
+else
+    # Run all tests.
+    src=/usr/local/lib/python${PYVER}/site-packages/bigdict
+
+    echo
+    echo --- running bandit ---
+    echo
+    docker run --rm ${TESTIMG} \
+        bandit -r -lll ${src} || exit 1
+    docker run --rm ${TESTIMG} \
+        bandit -r -lll /opt/bigdict/tests || exit 1
+
+    echo
+    echo --- running pyflakes ---
+    echo
+    docker run --rm ${TESTIMG} \
+        python -m pyflakes ${src} || exit 1
+    echo
+    docker run --rm ${TESTIMG} \
+        python -m pyflakes /opt/bigdict/tests || exit 1
+
+    echo
+    echo --- running mypy ---
+    echo
+    docker run --rm ${TESTIMG} \
+        bash -c "\
+            ln -s ${src} /tmp/src \
+            && python -m mypy /tmp/src \
+            && rm /tmp/src"
+    # mypy issues will not halt the build
+
+    echo
+    echo --- running pylint ---
+    echo
+    docker run --rm ${TESTIMG} \
+        bash -c "\
+            ln -s ${src} /tmp/src \
+            && python -m pylint --disable=C0103,C0114,C0115,C0116,C0301,C0303,C0305,R0903 /tmp/src \
+            && rm /tmp/src"
+    # pylint issues will not halt the build.
+
+    echo
+    echo --- running tests ---
+    echo
+    docker run --rm ${TESTIMG} \
+        py.test \
+            --log-cli-level info \
+            --cov=bigdict \
+            --cov-report term-missing \
+            --cov-fail-under 50 \
+            /opt/bigdict/tests
+fi
+

@@ -1,0 +1,62 @@
+#!/bin/bash
+
+set -e
+
+docker build \
+    -f Dockerfile-dev \
+    -t bigdict-dev:latest \
+    .
+
+SRC=/src/src/bigdict
+TESTS=/src/tests
+
+if [[ $# > 0 ]]; then
+    if [[ $1 == 'all' ]]; then
+        echo
+        echo --- checking code ---
+        echo
+        docker run \
+            --rm \
+            -v $(pwd):/src \
+            --workdir /src \
+            -e PYTHONPATH=/src/src \
+            bigdict-dev:latest \
+                /src/check-code
+        echo
+        echo --- running tests ---
+        echo
+        docker run \
+            --rm \
+            -v $(pwd):/src \
+            --workdir /src \
+            -e PYTHONPATH=/src/src \
+            bigdict-dev:latest \
+                py.test \
+                    --log-cli-level info \
+                    --cov=/src/src/bigdict \
+                    --cov-report term-missing \
+                    --cov-fail-under 50 \
+                    /src/tests
+    else
+        echo
+        echo --- running test ---
+        echo
+        docker run \
+            --rm \
+            -v $(pwd):/src \
+            --workdir /src \
+            -e PYTHONPATH=/src/src \
+            bigdict-dev:latest \
+                py.test \
+                    --log-cli-level debug \
+                    /src/tests/$1
+    fi
+else
+    docker run \
+        -it --rm \
+        -v $(pwd):/src \
+        --workdir /src \
+        -e PYTHONPATH=/src/src \
+        bigdict-dev:latest \
+        bash
+fi
