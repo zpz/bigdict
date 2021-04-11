@@ -37,7 +37,7 @@ if [[ $# > 0 ]]; then
                     --log-cli-level info \
                     --cov=/src/src/${PROJ} \
                     --cov-report term-missing \
-                    --cov-fail-under 50 \
+                    --cov-fail-under 70 \
                     /src/tests
     else
         echo

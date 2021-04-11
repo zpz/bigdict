@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 SRC=$(pwd)/src/bigdict
 TESTS=$(pwd)/tests
 
@@ -7,15 +9,15 @@ TESTS=$(pwd)/tests
 echo
 echo --- running bandit ---
 echo
-bandit -r -lll ${SRC} || exit 1
-bandit -r -lll ${TESTS} || exit 1
+bandit -r -lll ${SRC}
+bandit -r -lll ${TESTS}
 
 echo
 echo --- running pyflakes ---
 echo
-python -m pyflakes ${SRC} || exit 1
+python -m pyflakes ${SRC}
 echo
-python -m pyflakes ${TESTS} || exit 1
+python -m pyflakes ${TESTS}
 
 echo
 echo --- running mypy ---
@@ -26,6 +28,4 @@ echo
 echo --- running pylint ---
 echo
 python -m pylint --disable=C0103,C0114,C0115,C0116,C0301,C0303,C0305,R0903 ${SRC}
-
-exit 0
 

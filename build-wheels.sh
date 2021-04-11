@@ -40,7 +40,7 @@ for pyver in "${pythonversions[@]}"; do
     echo
     pybin=/opt/python/${pyver}/bin
     "${pybin}/pip" install ${PROJ} --no-index -f ${BUILDDIR}
-    (cd "$HOME"; "${pybin}/python" -m pytest /src/tests)
+    (cd "$HOME"; "${pybin}/python" -m pytest /src/tests) || exit 1
 done
 
 chown -R ${HOSTUSER} ${BUILDDIR}
