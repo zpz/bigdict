@@ -5,6 +5,7 @@
 
 set -e
 
+PROJ=bigdict
 PLAT=manylinux2010_x86_64
 BUILDDIR=/build
 
@@ -25,7 +26,6 @@ for pyver in "${pythonversions[@]}"; do
     echo ---- $pyver ----
     echo
     pybin=/opt/python/${pyver}/bin
-    # "${pybin}/pip" wheel /src/ --no-deps -w ${BUILDDIR}
     (cd /src/ && "${pybin}/python" -m build --sdist --wheel -o ${BUILDDIR})
 done
 
@@ -33,14 +33,14 @@ for whl in ${BUILDDIR}/*.whl; do
     repair_wheel "$whl"
 done
 
-# Install packages and test
+# Install packages and run tests
 for pyver in "${pythonversions[@]}"; do
     echo
     echo ---- $pyver ----
     echo
     pybin=/opt/python/${pyver}/bin
-    "${pybin}/pip" install bigdict --no-index -f ${BUILDDIR}
-    (cd "$HOME"; "${pybin}/python" -m pytest /src/tests)
+    "${pybin}/pip" install ${PROJ} --no-index -f ${BUILDDIR}
+    (cd "$HOME"; "${pybin}/python" -m pytest /src/tests) || exit 1
 done
 
 chown -R ${HOSTUSER} ${BUILDDIR}

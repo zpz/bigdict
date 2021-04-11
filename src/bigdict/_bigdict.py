@@ -7,10 +7,13 @@ import tempfile
 import uuid
 from collections.abc import MutableMapping, Mapping
 
-import rocksdb
+import rocksdb  # type: ignore
+
+# pylint: disable=no-self-use
 
 
 def rocks_opts(**kwargs):
+    # pylint: disable=no-member
     opts = rocksdb.Options(**kwargs)
     opts.table_factory = rocksdb.BlockBasedTableFactory(
         filter_policy=rocksdb.BloomFilterPolicy(10),
@@ -45,7 +48,7 @@ class Bigdict(MutableMapping):
         assert not os.path.isdir(path)
         os.makedirs(path)
 
-        _ = rocksdb.DB(
+        _ = rocksdb.DB(  # pylint: disable=no-member
             os.path.join(path, 'db'),
             rocks_opts(**db_opts, create_if_missing=True),
         )
@@ -53,14 +56,14 @@ class Bigdict(MutableMapping):
 
         json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
         z = cls(path)
-        z._keep_file = keep_files
+        z._keep_files = keep_files  # pylint: disable=protected-access
         return z
 
     def __init__(
             self,
             path: str,
             read_only: bool = False,
-            ):
+    ):
         self.path = path
         self.info = json.load(open(os.path.join(path, 'info.json'), 'r'))
         self._db = None
@@ -90,7 +93,7 @@ class Bigdict(MutableMapping):
     @property
     def db(self):
         if self._db is None:
-            self._db = rocksdb.DB(
+            self._db = rocksdb.DB(  # pylint: disable=no-member
                 os.path.join(self.path, 'db'),
                 rocks_opts(**self.info['db_opts'], create_if_missing=False),
                 read_only=self._read_only)
@@ -120,7 +123,7 @@ class Bigdict(MutableMapping):
         shutil.rmtree(self.path)
         os.makedirs(path)
         json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
-        _ = rocksdb.DB(os.path.join(path, 'db'),
+        _ = rocksdb.DB(os.path.join(path, 'db'),  # pylint: disable=no-member
                        rocks_opts(**info['db_opts'], create_if_missing=True),
                        )
         self.__init__(path)
@@ -149,21 +152,6 @@ class Bigdict(MutableMapping):
             return self[key]
         except KeyError:
             return default
-
-    def setdefault(self, key, default=None):
-        v = self.get(key)
-        if v is None:
-            self[key] = default
-            return default
-        return v
-
-    def update(self, x) -> None:
-        if isinstance(x, Mapping):
-            for k, v in x.items():
-                self[k] = v
-        else:
-            for k, v in x:
-                self[k] = v
 
     def keys(self):
         it = self.db.iterkeys()

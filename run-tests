@@ -2,12 +2,14 @@
 
 set -e
 
+PROJ=bigdict
+
 docker build \
     -f Dockerfile-dev \
-    -t bigdict-dev:latest \
+    -t ${PROJ}-dev:latest \
     .
 
-SRC=/src/src/bigdict
+SRC=/src/src/${PROJ}
 TESTS=/src/tests
 
 if [[ $# > 0 ]]; then
@@ -20,7 +22,7 @@ if [[ $# > 0 ]]; then
             -v $(pwd):/src \
             --workdir /src \
             -e PYTHONPATH=/src/src \
-            bigdict-dev:latest \
+            ${PROJ}-dev:latest \
                 /src/check-code
         echo
         echo --- running tests ---
@@ -30,12 +32,12 @@ if [[ $# > 0 ]]; then
             -v $(pwd):/src \
             --workdir /src \
             -e PYTHONPATH=/src/src \
-            bigdict-dev:latest \
+            ${PROJ}-dev:latest \
                 py.test \
                     --log-cli-level info \
-                    --cov=/src/src/bigdict \
+                    --cov=/src/src/${PROJ} \
                     --cov-report term-missing \
-                    --cov-fail-under 50 \
+                    --cov-fail-under 70 \
                     /src/tests
     else
         echo
@@ -46,7 +48,7 @@ if [[ $# > 0 ]]; then
             -v $(pwd):/src \
             --workdir /src \
             -e PYTHONPATH=/src/src \
-            bigdict-dev:latest \
+            ${PROJ}-dev:latest \
                 py.test \
                     --log-cli-level debug \
                     /src/tests/$1
@@ -57,6 +59,6 @@ else
         -v $(pwd):/src \
         --workdir /src \
         -e PYTHONPATH=/src/src \
-        bigdict-dev:latest \
+        ${PROJ}-dev:latest \
         bash
 fi
