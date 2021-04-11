@@ -2,9 +2,12 @@
 
 set -e
 
+PROJ=bigdict
+
+
 docker build \
     -f Dockerfile-release \
-    -t bigdict-release:latest \
+    -t ${PROJ}-release:latest \
     .
 
 rm -rf $(pwd)/build
@@ -14,6 +17,6 @@ docker run \
     --rm \
     -e HOSTUSER=$(id -u):$(id -g) \
     -v $(pwd)/build:/build \
-    bigdict-release:latest \
+    ${PROJ}-release:latest \
     bash /src/build-wheels.sh
 

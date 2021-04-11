@@ -8,7 +8,7 @@ README = (HERE / 'README.md').read_text()
 
 setup(
     name='bigdict',
-    version='21.1.5',
+    version='21.4.10',
     description='A persisted, out-of-memory dict for Python',
     long_description=README,
     long_description_content_type='text/markdown',
@@ -16,11 +16,11 @@ setup(
     author='Zepu Zhang',
     author_email='zepu.zhang@gmail.com',
     license='MIT',
-    python_requires='>=3.6',
+    python_requires='>=3.7',
     package_dir={'': 'src'},
     packages=['bigdict'],
     include_package_data=True,
     install_requires=[
-        'python-rocksdb==0.7.0',
+        'rocksdb==0.7.0',
     ],
 )

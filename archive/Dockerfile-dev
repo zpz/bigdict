@@ -1,0 +1,33 @@
+FROM python:3.6-slim
+USER root
+
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends --no-upgrade -y curl \
+    && curl -skL https://raw.githubusercontent.com/zpz/linux/master/bash/bashrc -o /etc/bash.bashrc \
+    \
+    && apt-get install --no-install-recommends --no-upgrade -y gcc g++ python3-dev make \
+    \
+    && apt-get install --no-install-recommends --no-upgrade -y \
+        libgflags-dev \
+        zlib1g-dev \
+        libbz2-dev \
+        liblz4-dev \
+        libzstd-dev \
+        libsnappy-dev
+
+ARG ROCKSDB_VERSION=6.17.3
+RUN curl -skL https://github.com/facebook/rocksdb/archive/refs/tags/v${ROCKSDB_VERSION}.tar.gz \
+        | tar xz -C /tmp/ \
+    && cd /tmp/rocksdb-${ROCKSDB_VERSION} \
+    && PORTABLE=1 DISABLE_WARNING_AS_ERROR=1 make shared_lib \
+    && make install-shared \
+    && ldconfig
+
+
+COPY . /tmp/
+
+RUN cd /tmp \
+    && python -m pip install -e . \
+    && python -m pip uninstall -y bigdict  \
+    && python -m pip install -r /tmp/requirements-test.txt
