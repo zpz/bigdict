@@ -8,7 +8,7 @@ README = (HERE / 'README.md').read_text()
 
 setup(
     name='bigdict',
-    version='21.4.10',
+    version='21.4.11',
     description='A persisted, out-of-memory dict for Python',
     long_description=README,
     long_description_content_type='text/markdown',
