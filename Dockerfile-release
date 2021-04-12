@@ -1,24 +1,23 @@
 FROM quay.io/pypa/manylinux2010_x86_64
 USER root
 
-ARG PROJ=bigdict
-
-# Refer to:
-# https://github.com/facebook/rocksdb/blob/master/INSTALL.md
-
+ARG PROJ
+ARG PYTHONVERSIONS="cp37-cp37m cp38-cp38"
 
 COPY . /src/
 
-
-ENV PYTHONVERSIONS="cp37-cp37m cp38-cp38"
-
+# Build packages.
 RUN ( \
         pyvers=( $PYTHONVERSIONS ); \
         for pyver in "${pyvers[@]}"; do \
             pybin=/opt/python/${pyver}/bin; \
-            ${pybin}/pip install -e /src/ && ${pybin}/pip uninstall -y ${PROJ}; \
-            ${pybin}/pip install -r /src/requirements-test.txt; \
             ${pybin}/pip install build; \
+            ${pybin}/pip install -r /src/requirements-test.txt; \
+            ${pybin}/pip install -e /src/; \
+            ${pybin}/pip uninstall -y ${PROJ}; \
         done \
     )
+
+RUN bash /src/build-wheels.sh ${PROJ}
+
 

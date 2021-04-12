@@ -4,19 +4,13 @@ set -e
 
 PROJ=bigdict
 
-
 docker build \
     -f Dockerfile-release \
+    --build-arg PROJ=${PROJ} \
     -t ${PROJ}-release:latest \
     .
 
+docker create --name ${PROJ}-release ${PROJ}-release:latest
 rm -rf $(pwd)/build
-mkdir -p $(pwd)/build
-
-docker run \
-    --rm \
-    -e HOSTUSER=$(id -u):$(id -g) \
-    -v $(pwd)/build:/build \
-    ${PROJ}-release:latest \
-    bash /src/build-wheels.sh
-
+docker cp ${PROJ}-release:/build build
+docker rm -f ${PROJ}-release
