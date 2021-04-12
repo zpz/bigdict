@@ -2,8 +2,7 @@
 
 set -e
 
-PROJ="$1"
-
+PROJ=bigdict
 SRC=$(pwd)/src/${PROJ}
 TESTS=$(pwd)/tests
 

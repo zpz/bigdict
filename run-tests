@@ -6,7 +6,7 @@ PROJ=bigdict
 
 docker build \
     -f Dockerfile-dev \
-    --build-arg PROJ=bigdict \
+    --build-arg PROJ=${PROJ} \
     -t ${PROJ}-dev:latest \
     .
 
