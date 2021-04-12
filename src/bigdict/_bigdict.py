@@ -203,6 +203,11 @@ class Bigdict(MutableMapping):
 
 
 class DictView(Mapping):
+    # `types.MappingProxyType` could achieve similar effects,
+    # but it might be problematic when we send the object
+    # to another process. Plus, this separate class will have
+    # any flexibility that may be needed.
+
     def __init__(self, dict_: Mapping):
         self._dict = dict_
 
