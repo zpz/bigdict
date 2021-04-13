@@ -5,9 +5,7 @@
 
 set -e
 
-PROJ="$1"
 PLAT=manylinux2010_x86_64
-BUILDDIR=/build
 
 function repair_wheel {
     wheel="$1"
@@ -19,28 +17,18 @@ function repair_wheel {
 }
 
 
-pythonversions=( $PYTHONVERSIONS )
-
-for pyver in "${pythonversions[@]}"; do
-    echo
-    echo ---- building in $pyver ----
-    echo
-    pybin=/opt/python/${pyver}/bin
-    (cd /src/ && "${pybin}/python" -m build --sdist --wheel -o ${BUILDDIR})
-done
-
 for whl in ${BUILDDIR}/*.whl; do
     repair_wheel "$whl"
 done
 
+
 # Install package and run tests
+pythonversions=( $PYTHONVERSIONS )
 for pyver in "${pythonversions[@]}"; do
     echo
     echo ---- testing in $pyver ----
     echo
     pybin=/opt/python/${pyver}/bin
     "${pybin}/pip" install ${PROJ} --no-index -f ${BUILDDIR}
-    (cd "$HOME"; "${pybin}/python" -m pytest /src/tests) || exit 1
+    (cd "$HOME"; "${pybin}/python" -m pytest /src/tests)
 done
-
-# chown -R ${HOSTUSER} ${BUILDDIR}
