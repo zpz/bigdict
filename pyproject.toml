@@ -1,0 +1,64 @@
+[build-system]
+requires = ["flit_core >=3.7.1,<4"]
+build-backend = "flit_core.buildapi"
+
+
+[project]
+name = "bigdict"
+authors = [
+    {name = "Zepu Zhang", email = "zepu.zhang@gmail.com"},
+]
+dependencies = [
+    "rocksdb==0.7.0",
+]
+requires-python = ">=3.8"
+readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = [
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dynamic = ['version', 'description']
+
+
+[project.urls]
+Source = "https://github.com/zpz/bigdict"
+
+
+[project.optional-dependencies]
+test = [
+    "bandit",
+    "coverage[toml]",
+    "flake8",
+    "mypy",
+    "pylint",
+    "pytest",
+    "pytest-asyncio",
+]
+
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-sv --log-cli-level info -p no:cacheprovider"
+asyncio_mode = "auto"
+
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+skip_empty = true
+
+
+[tool.pylint.messages_control]
+max-line-length = 88
+disable = [
+    "consider-using-f-string",
+    "missing-docstring",
+    "invalid-name",
+    "line-too-long",
+    "fixme",
+    "too-few-public-methods",
+    "too-many-branches",
+    "too-many-return-statements",
+]
