@@ -1,16 +1,4 @@
 #!/bin/bash
 
-set -e
+source <(curl -s https://raw.githubusercontent.com/zpz/utilities.py/master/make-release)
 
-PROJ=bigdict
-
-docker build \
-    -f Dockerfile-release \
-    --build-arg PROJ=${PROJ} \
-    -t ${PROJ}-release:latest \
-    .
-
-docker create --name ${PROJ}-release ${PROJ}-release:latest
-rm -rf $(pwd)/build
-docker cp ${PROJ}-release:/build build
-docker rm -f ${PROJ}-release
