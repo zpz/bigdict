@@ -9,13 +9,12 @@ Release 22.5.29
 Release 21.4.11
 ===============
 
-- Changed dependency from python-rocksdb to rocksdb,
-  which provides a built package in a wheel, greately simplifying build and installation.
-- Bumped Python requirement from 3.6 to 3.7, because rocksdb provides wheels for 3.7-3.8 only.
-- Enforce all mypy and pylint checks.
+- Changed dependency from `python-rocksdb` to `rocksdb`, which provides a built package in a wheel, greately simplifying build and installation.
+- Bumped Python requirement from 3.6 to 3.7, because `rocksdb` provides wheels for 3.7-3.8 only.
+- Enforce all `mypy` and `pylint` checks.
 
 
 Release 21.1.5
 ==============
 
-Initial public release.
+Initial release. Uploaded to Pypi.
