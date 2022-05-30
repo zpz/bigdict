@@ -9,8 +9,8 @@ authors = [
     {name = "Zepu Zhang", email = "zepu.zhang@gmail.com"},
 ]
 dependencies = [
-    # "lbry-rocksdb",
-    "rocksdb",
+    "lbry-rocksdb",
+    # "rocksdb",
 ]
 requires-python = ">=3.8"
 readme = "README.md"
@@ -20,7 +20,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dynamic = ['version', 'description']
+dynamic = ['version']
+description = "Bigdict based on rocksdb"
 
 
 [project.urls]
