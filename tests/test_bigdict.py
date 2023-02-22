@@ -45,10 +45,11 @@ def worker(d, q):
 def test_mp():
     bd = Bigdict.new()
     bd['a'] = 3
+    bdr = Bigdict(bd.path, read_only=True)
 
     mp = multiprocessing.get_context('spawn')
     q = mp.Queue()
-    p = mp.Process(target=worker, args=(bd, q))
+    p = mp.Process(target=worker, args=(bdr, q))
     p.start()
 
     assert q.get() == 1
