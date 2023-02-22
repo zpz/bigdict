@@ -80,12 +80,14 @@ class Bigdict(MutableMapping):
         return self.__repr__()
 
     def __getstate__(self):
-        assert self._read_only, "passing to other processes is supported only for read-only"
-        return (self.path, )
+        assert (
+            self._read_only
+        ), "passing to other processes is supported only for read-only"
+        return (self.path,)
 
     def __setstate__(self, state):
-        self.path, = state
-        self.info = json.load(open(os.path.join(self.path, 'info.json'), 'r'))
+        (self.path,) = state
+        self.info = json.load(open(os.path.join(self.path, "info.json"), "r"))
         self._db = None
         self._read_only = True
         self._keep_files = True
@@ -126,7 +128,7 @@ class Bigdict(MutableMapping):
         assert not self._read_only
         if self._destroyed or self._flushed:
             return
-        json.dump(self.info, open(os.path.join(self.path, 'info.json'), 'w'))
+        json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
         if compact:
             self.db.compact_range()
         self._flushed = True
