@@ -5,7 +5,7 @@ import pickle
 import shutil
 import tempfile
 import uuid
-from collections.abc import MutableMapping, Mapping
+from collections.abc import Mapping, MutableMapping
 
 import rocksdb  # type: ignore
 
@@ -17,26 +17,27 @@ def rocks_opts(**kwargs):
     opts = rocksdb.Options(**kwargs)
     opts.table_factory = rocksdb.BlockBasedTableFactory(
         filter_policy=rocksdb.BloomFilterPolicy(10),
-        block_cache=rocksdb.LRUCache(2 * (1024 ** 3)),
-        block_cache_compressed=rocksdb.LRUCache(500 * (1024 ** 2)),
+        block_cache=rocksdb.LRUCache(2 * (1024**3)),
+        block_cache_compressed=rocksdb.LRUCache(500 * (1024**2)),
     )
     return opts
 
 
 class Bigdict(MutableMapping):
     @classmethod
-    def new(cls,
-            path: str = None,
-            *,
-            max_log_file_size: int = 2097152,
-            keep_log_file_num: int = 2,
-            ):
+    def new(
+        cls,
+        path: str = None,
+        *,
+        max_log_file_size: int = 2097152,
+        keep_log_file_num: int = 2,
+    ):
         db_opts = {
-            'max_log_file_size': max_log_file_size,
-            'keep_log_file_num': keep_log_file_num,
+            "max_log_file_size": max_log_file_size,
+            "keep_log_file_num": keep_log_file_num,
         }
         info = {
-            'db_opts': db_opts,
+            "db_opts": db_opts,
         }
 
         if path is None:
@@ -49,23 +50,23 @@ class Bigdict(MutableMapping):
         os.makedirs(path)
 
         _ = rocksdb.DB(  # pylint: disable=no-member
-            os.path.join(path, 'db'),
+            os.path.join(path, "db"),
             rocks_opts(**db_opts, create_if_missing=True),
         )
         del _
 
-        json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
+        json.dump(info, open(os.path.join(path, "info.json"), "w"))
         z = cls(path)
         z._keep_files = keep_files  # pylint: disable=protected-access
         return z
 
     def __init__(
-            self,
-            path: str,
-            read_only: bool = False,
+        self,
+        path: str,
+        read_only: bool = False,
     ):
         self.path = path
-        self.info = json.load(open(os.path.join(path, 'info.json'), 'r'))
+        self.info = json.load(open(os.path.join(path, "info.json"), "r"))
         self._db = None
         self._read_only = read_only
         self._keep_files = True
@@ -73,7 +74,7 @@ class Bigdict(MutableMapping):
         self._flushed = True
 
     def __repr__(self):
-        return f'{self.__class__.__name__}({self.path})'
+        return f"{self.__class__.__name__}({self.path})"
 
     def __str__(self):
         return self.__repr__()
@@ -94,9 +95,10 @@ class Bigdict(MutableMapping):
     def db(self):
         if self._db is None:
             self._db = rocksdb.DB(  # pylint: disable=no-member
-                os.path.join(self.path, 'db'),
-                rocks_opts(**self.info['db_opts'], create_if_missing=False),
-                read_only=self._read_only)
+                os.path.join(self.path, "db"),
+                rocks_opts(**self.info["db_opts"], create_if_missing=False),
+                read_only=self._read_only,
+            )
         return self._db
 
     def __del__(self):
@@ -110,22 +112,23 @@ class Bigdict(MutableMapping):
     def flush(self):
         if self._destroyed or self._flushed:
             return
-        json.dump(self.info, open(os.path.join(self.path, 'info.json'), 'w'))
+        json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
         self.db.compact_range()
         self._flushed = True
 
     def clear(self):
         info = {
-            'db_opts': self.info['db_opts'],
+            "db_opts": self.info["db_opts"],
         }
         keep_files = self._keep_files
         path = self.path
         shutil.rmtree(self.path)
         os.makedirs(path)
-        json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
-        _ = rocksdb.DB(os.path.join(path, 'db'),  # pylint: disable=no-member
-                       rocks_opts(**info['db_opts'], create_if_missing=True),
-                       )
+        json.dump(info, open(os.path.join(path, "info.json"), "w"))
+        _ = rocksdb.DB(
+            os.path.join(path, "db"),  # pylint: disable=no-member
+            rocks_opts(**info["db_opts"], create_if_missing=True),
+        )
         self.__init__(path)
         self._keep_files = keep_files
 
@@ -144,7 +147,7 @@ class Bigdict(MutableMapping):
         byteskey = self.encode_key(key)
         value = self.db.get(byteskey)
         if value is None:
-            raise KeyError(f'{key} not in {self}')
+            raise KeyError(f"{key} not in {self}")
         return self.decode_value(value)
 
     def get(self, key, default=None):
@@ -196,10 +199,8 @@ class Bigdict(MutableMapping):
         self.db.delete(self.encode_key(key))
         self._flushed = False
 
-    def view(self) -> 'DictView':
-        return DictView(
-            self.__class__(self.path, read_only=True)
-        )
+    def view(self) -> "DictView":
+        return DictView(self.__class__(self.path, read_only=True))
 
 
 class DictView(Mapping):
@@ -212,7 +213,7 @@ class DictView(Mapping):
         self._dict = dict_
 
     def __repr__(self):
-        return f'{self.__class__.__name__}({repr(self._dict)})'
+        return f"{self.__class__.__name__}({repr(self._dict)})"
 
     def __str__(self):
         return self.__repr__()
