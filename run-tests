@@ -1,4 +1,0 @@
-#!/bin/bash
-
-source <(curl -s https://raw.githubusercontent.com/zpz/utilities.py/master/run-tests)
-
