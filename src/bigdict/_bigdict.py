@@ -79,6 +79,19 @@ class Bigdict(MutableMapping):
     def __str__(self):
         return self.__repr__()
 
+    def __getstate__(self):
+        assert self._read_only, "passing to other processes is supported only for read-only"
+        return (self.path, )
+
+    def __setstate__(self, state):
+        self.path, = state
+        self.info = json.load(open(os.path.join(self.path, 'info.json'), 'r'))
+        self._db = None
+        self._read_only = True
+        self._keep_files = True
+        self._destroyed = False
+        self._flushed = True
+
     def encode_key(self, k):
         return pickle.dumps(k)
 
@@ -109,14 +122,17 @@ class Bigdict(MutableMapping):
         else:
             self.destroy()
 
-    def flush(self):
+    def flush(self, compact=True):
+        assert not self._read_only
         if self._destroyed or self._flushed:
             return
-        json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
-        self.db.compact_range()
+        json.dump(self.info, open(os.path.join(self.path, 'info.json'), 'w'))
+        if compact:
+            self.db.compact_range()
         self._flushed = True
 
     def clear(self):
+        assert not self._read_only
         info = {
             "db_opts": self.info["db_opts"],
         }
@@ -133,11 +149,13 @@ class Bigdict(MutableMapping):
         self._keep_files = keep_files
 
     def destroy(self):
+        assert not self._read_only
         self._db = None
         shutil.rmtree(self.path, ignore_errors=True)
         self._destroyed = True
 
     def __setitem__(self, key, value):
+        assert not self._read_only
         key = self.encode_key(key)
         value = self.encode_value(value)
         self.db.put(key, value)
@@ -147,7 +165,7 @@ class Bigdict(MutableMapping):
         byteskey = self.encode_key(key)
         value = self.db.get(byteskey)
         if value is None:
-            raise KeyError(f"{key} not in {self}")
+            raise KeyError(key)
         return self.decode_value(value)
 
     def get(self, key, default=None):
@@ -196,6 +214,7 @@ class Bigdict(MutableMapping):
         return self.__len__() > 0
 
     def __delitem__(self, key):
+        assert not self._read_only
         self.db.delete(self.encode_key(key))
         self._flushed = False
 
