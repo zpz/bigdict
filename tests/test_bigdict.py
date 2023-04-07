@@ -1,3 +1,5 @@
+import multiprocessing
+from time import sleep
 from uuid import uuid4
 from bigdict import Bigdict
 
@@ -29,3 +31,32 @@ def test_bigdict():
 
     assert len(bd2) == 5
     bd.destroy()
+
+
+def worker(d, q):
+    assert d['a'] == 3
+    assert 'b' not in d
+    q.put(1)
+    assert q.get() == 2
+    assert d['b'] == 4
+
+
+
+def test_mp():
+    bd = Bigdict.new()
+    bd['a'] = 3
+    bdr = Bigdict(bd.path, read_only=True)
+
+    mp = multiprocessing.get_context('spawn')
+    q = mp.Queue()
+    p = mp.Process(target=worker, args=(bdr, q))
+    p.start()
+
+    assert q.get() == 1
+    bd['b'] = 4
+    bd.flush()
+    sleep(1)
+    q.put(2)
+
+    p.join()
+
