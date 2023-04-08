@@ -119,20 +119,22 @@ class Bigdict(MutableMapping):
                 )
             else:
                 if self._read_only:
-                    self._db = lmdb.Environment(os.path.join(self.path, 'db', '0'),
-                                                subdir=True,
-                                                create=False,
-                                                readonly=True,
-                                                readahead=False,
-                                                )
+                    self._db = lmdb.Environment(
+                        os.path.join(self.path, 'db', '0'),
+                        subdir=True,
+                        create=False,
+                        readonly=True,
+                        readahead=False,
+                    )
                 else:
                     os.makedirs(os.path.join(self.path, 'db', '0'), exist_ok=True)
-                    self._db = lmdb.Environment(os.path.join(self.path, 'db', '0'),
-                                                subdir=True,
-                                                readonly=False,
-                                                writemap=True,
-                                                readahead=False,
-                                                )
+                    self._db = lmdb.Environment(
+                        os.path.join(self.path, 'db', '0'),
+                        subdir=True,
+                        readonly=False,
+                        writemap=True,
+                        readahead=False,
+                    )
         return self._db
 
     @property
