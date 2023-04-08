@@ -9,8 +9,8 @@ authors = [
     {name = "Zepu Zhang", email = "zepu.zhang@gmail.com"},
 ]
 dependencies = [
-    "lbry-rocksdb",
-    # "rocksdb",
+    # "lbry-rocksdb",
+    "rocksdb",
 ]
 requires-python = ">=3.8"
 readme = "README.rst"
@@ -20,8 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dynamic = ['version']
-description = "Bigdict based on rocksdb"
+dynamic = ['version', 'description']
 
 
 [project.urls]
@@ -30,7 +29,7 @@ Source = "https://github.com/zpz/bigdict"
 
 [project.optional-dependencies]
 doc = [
-    "sphinx < 6.0.0",
+    "sphinx",
     "numpydoc",
     "pydata-sphinx-theme",
 ]
@@ -40,10 +39,11 @@ test = [
     "pytest-asyncio",
 ]
 
+
 [tool.ruff]
-target-version = "py38"
-select = ["E", "F", "I001"]  # isort
-ignore = ["E501"]  # line length
+target-version = "py310"
+select = ["E", "F", "S", "I001"]  # isort
+ignore = ["E501", "S101", "S102", "S103", "S104", "S108", "S301", "S311", "S608"]
 
 
 [tool.ruff.per-file-ignores]
@@ -52,7 +52,7 @@ ignore = ["E501"]  # line length
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-sv --log-cli-level info -p no:cacheprovider --tb=short"
+addopts = "-sv --log-cli-level info -p no:cacheprovider --tb=short --durations 3"
 asyncio_mode = "auto"
 
 
@@ -63,4 +63,5 @@ skip_empty = true
 
 
 [tool.coverage.run]
+source = ["bigdict"]
 data_file = "/tmp/.coverage"
