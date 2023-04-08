@@ -7,6 +7,13 @@
 - Change version schema away from datetime; yank the previous releases; prep to move away from rocksdb in   upcoming releases.
 - Change devel base image from `py3` to `py3-build`, which contains Rocksdb dependencies.
 
+This release changes versioning scheme from datetime-based to numeric and prepare to refactor in the future.
+
+This release 0.1.0 is the same as the previous 22.5.29.
+
+There are difficulties in the ordering or even the visibility of the version 0.1.0 and the older ones 22.5.29, 21.4.11, and 21.1.5 on Github.
+Since the older releases are not that important going forward, they are deleted. Their info remains in CHANGELOG.md.
+
 
 ## [22.5.29] - [2022-05-29]
 
