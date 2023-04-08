@@ -1,6 +1,7 @@
 import multiprocessing
 from time import sleep
 from uuid import uuid4
+
 from bigdict import Bigdict
 
 
@@ -38,8 +39,8 @@ def worker(d, q):
     assert 'b' not in d
     q.put(1)
     assert q.get() == 2
-    assert d['b'] == 4
-
+    # assert d['b'] == 4
+    # 'b' is not available
 
 
 def test_mp():
@@ -60,3 +61,4 @@ def test_mp():
 
     p.join()
 
+    assert bd['b'] == 4

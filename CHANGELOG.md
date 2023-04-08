@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.0] - [2023-04-07]
+
+- Revert dependency from `lbry-rocksdb` back to `rocksdb` because the former does not provide
+  build artifacts for python 3.10.
+- Change version schema away from datetime; yank the previous releases; prep to move away from rocksdb in   upcoming releases.
+- Change devel base image from `py3` to `py3-build`, which contains Rocksdb dependencies.
+
+
 ## [22.5.29] - [2022-05-29]
 
 - Changed dependency to `lbry-rocksdb`, which has more recent maintenance.
