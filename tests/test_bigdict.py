@@ -15,10 +15,11 @@ def test_bigdict():
     bd[('a', 3)] = {'a': 3, 'b': 4}
     uid = str(uuid4())
     bd['uid'] = uid
+    bd.commit()
 
     assert len(bd) == 5
 
-    bd2 = bd.view()
+    bd2 = Bigdict(bd.path, read_only=True)
     assert bd2['a'] == 3
     assert bd2['b'] == 4
     assert bd2[9] == [1, 2, 'a']
@@ -26,11 +27,13 @@ def test_bigdict():
     assert bd2['uid'] == uid
 
     del bd['b']
+    bd.commit()
+
     assert 'b' not in bd
     assert len(bd) == 4
     bd.flush()
 
-    assert len(bd2) == 5
+    assert len(bd2) == 4
     bd.destroy()
 
 

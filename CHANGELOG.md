@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.0] - in progress
+
+- Change storage engine from RocksDB to LMDB.
+- Class `DictView` is removed.
+
+
 ## [0.1.0] - [2023-04-07]
 
 - Revert dependency from `lbry-rocksdb` back to `rocksdb` because the former does not provide

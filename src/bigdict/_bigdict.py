@@ -5,15 +5,14 @@ import pickle
 import shutil
 import tempfile
 import uuid
-from collections.abc import Mapping, MutableMapping
+import warnings
+from collections.abc import MutableMapping
 
-import rocksdb  # type: ignore
-
-# pylint: disable=no-self-use
+import lmdb
+import rocksdb
 
 
 def rocks_opts(**kwargs):
-    # pylint: disable=no-member
     opts = rocksdb.Options(**kwargs)
     opts.table_factory = rocksdb.BlockBasedTableFactory(
         filter_policy=rocksdb.BloomFilterPolicy(10),
@@ -28,16 +27,15 @@ class Bigdict(MutableMapping):
     def new(
         cls,
         path: str = None,
-        *,
-        max_log_file_size: int = 2097152,
-        keep_log_file_num: int = 2,
     ):
-        db_opts = {
-            "max_log_file_size": max_log_file_size,
-            "keep_log_file_num": keep_log_file_num,
-        }
         info = {
-            "db_opts": db_opts,
+            "storage_version": 1,
+            # `storage_version = 1` is introduced in release 0.2.0.
+            # It was missing before that, and treated as 0.
+            # Version 0 used a RocksDB backend;
+            # version 1 uses a LMDB backend.
+            "shard_level": 0,
+            # Other values will be allowed later.
         }
 
         if path is None:
@@ -49,15 +47,9 @@ class Bigdict(MutableMapping):
         assert not os.path.isdir(path)
         os.makedirs(path)
 
-        _ = rocksdb.DB(  # pylint: disable=no-member
-            os.path.join(path, "db"),
-            rocks_opts(**db_opts, create_if_missing=True),
-        )
-        del _
-
         json.dump(info, open(os.path.join(path, "info.json"), "w"))
-        z = cls(path)
-        z._keep_files = keep_files  # pylint: disable=protected-access
+        z = cls(path, read_only=False)
+        z._keep_files = keep_files
         return z
 
     def __init__(
@@ -67,11 +59,18 @@ class Bigdict(MutableMapping):
     ):
         self.path = path
         self.info = json.load(open(os.path.join(path, "info.json"), "r"))
+        if self.info.get('storage_version', 0) == 0:
+            if not read_only:
+                warnings.warn("older data with RocksDB backend is read-only")
+                read_only = True
         self._db = None
+        self._wtxn = None  # write transaction
+        self._rtxn = None  # read transaction
         self._read_only = read_only
         self._keep_files = True
         self._destroyed = False
         self._flushed = True
+        self._storage_version = self.info.get('storage_version', 0)
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.path})"
@@ -89,10 +88,13 @@ class Bigdict(MutableMapping):
         (self.path,) = state
         self.info = json.load(open(os.path.join(self.path, "info.json"), "r"))
         self._db = None
+        self._wtxn = None
+        self._rtxn = None
         self._read_only = True
         self._keep_files = True
         self._destroyed = False
         self._flushed = True
+        self._storage_version = self.info.get('storage_version', 0)
 
     def encode_key(self, k):
         return pickle.dumps(k)
@@ -109,14 +111,61 @@ class Bigdict(MutableMapping):
     @property
     def db(self):
         if self._db is None:
-            self._db = rocksdb.DB(  # pylint: disable=no-member
-                os.path.join(self.path, "db"),
-                rocks_opts(**self.info["db_opts"], create_if_missing=False),
-                read_only=self._read_only,
-            )
+            if self._storage_version == 0:
+                self._db = rocksdb.DB(  # pylint: disable=no-member
+                    os.path.join(self.path, "db"),
+                    rocks_opts(**self.info["db_opts"], create_if_missing=False),
+                    read_only=self._read_only,
+                )
+            else:
+                if self._read_only:
+                    self._db = lmdb.Environment(os.path.join(self.path, 'db', '0'),
+                                                subdir=True,
+                                                create=False,
+                                                readonly=True,
+                                                readahead=False,
+                                                )
+                else:
+                    os.makedirs(os.path.join(self.path, 'db', '0'), exist_ok=True)
+                    self._db = lmdb.Environment(os.path.join(self.path, 'db', '0'),
+                                                subdir=True,
+                                                readonly=False,
+                                                writemap=True,
+                                                readahead=False,
+                                                )
         return self._db
 
+    @property
+    def _write_txn(self):
+        if self._wtxn is None:
+            txn = lmdb.Transaction(self.db, write=True)
+            txn.__enter__()
+            self._wtxn = txn
+        return self._wtxn
+
+    @property
+    def _read_txn(self):
+        if self._rtxn is None:
+            txn = lmdb.Transaction(self.db, write=False)
+            txn.__enter__()
+            self._rtxn = txn
+        return self._rtxn
+
+    def _close(self):
+        if self._storage_version == 0:
+            return
+        if self._wtxn is not None:
+            self._wtxn.__exit__()
+            self._write_txn = None
+        if self._rtxn is not None:
+            self._rtxn.__exit__()
+            self._rtxn = None
+        if self._db is not None:
+            self._db.close()
+            self._db = None
+
     def __del__(self):
+        self._close()
         if self._destroyed or self._read_only:
             return
         if self._keep_files:
@@ -124,35 +173,36 @@ class Bigdict(MutableMapping):
         else:
             self.destroy()
 
-    def flush(self, compact=True):
+    def commit(self):
+        if self._wtxn is not None:
+            self._wtxn.commit()
+            self._wtxn = None
+
+    def flush(self):
         assert not self._read_only
         if self._destroyed or self._flushed:
             return
+        self._close()
         json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
-        if compact:
-            self.db.compact_range()
         self._flushed = True
 
     def clear(self):
         assert not self._read_only
+        self._close()
         info = {
-            "db_opts": self.info["db_opts"],
+            'storage_version': self.info['storage_version'],
         }
         keep_files = self._keep_files
         path = self.path
         shutil.rmtree(self.path)
         os.makedirs(path)
         json.dump(info, open(os.path.join(path, "info.json"), "w"))
-        _ = rocksdb.DB(
-            os.path.join(path, "db"),  # pylint: disable=no-member
-            rocks_opts(**info["db_opts"], create_if_missing=True),
-        )
         self.__init__(path)
         self._keep_files = keep_files
 
     def destroy(self):
         assert not self._read_only
-        self._db = None
+        self._close()
         shutil.rmtree(self.path, ignore_errors=True)
         self._destroyed = True
 
@@ -160,12 +210,17 @@ class Bigdict(MutableMapping):
         assert not self._read_only
         key = self.encode_key(key)
         value = self.encode_value(value)
-        self.db.put(key, value)
+        self._write_txn.put(key, value)
         self._flushed = False
 
     def __getitem__(self, key):
         byteskey = self.encode_key(key)
-        value = self.db.get(byteskey)
+        if self._storage_version == 0:
+            value = self.db.get(byteskey)
+        else:
+            value = self._read_txn.get(byteskey)
+        # `value` can't be `None` as a valid return from the db,
+        # because all values are bytes.
         if value is None:
             raise KeyError(key)
         return self.decode_value(value)
@@ -177,25 +232,40 @@ class Bigdict(MutableMapping):
             return default
 
     def keys(self):
-        it = self.db.iterkeys()
-        it.seek_to_first()
-        for key in it:
-            yield self.decode_key(key)
+        if self._storage_version == 0:
+            it = self.db.iterkeys()
+            it.seek_to_first()
+            for key in it:
+                yield self.decode_key(key)
+        else:
+            cursor = self._read_txn.cursor()
+            for k in cursor.iternext(keys=True, values=False):
+                yield k
 
     def values(self):
-        it = self.db.itervalues()
-        it.seek_to_first()
-        for value in it:
-            yield self.decode_value(value)
+        if self._storage_version == 0:
+            it = self.db.itervalues()
+            it.seek_to_first()
+            for value in it:
+                yield self.decode_value(value)
+        else:
+            cursor = self._read_txn.cursor()
+            for v in cursor.iternext(keys=False, values=True):
+                yield v
 
     def __iter__(self):
         return self.keys()
 
     def items(self):
-        it = self.db.iteritems()
-        it.seek_to_first()
-        for key, value in it:
-            yield self.decode_key(key), self.decode_value(value)
+        if self._storage_version == 0:
+            it = self.db.iteritems()
+            it.seek_to_first()
+            for key, value in it:
+                yield self.decode_key(key), self.decode_value(value)
+        else:
+            cursor = self._read_txn.cursor()
+            for key, value in cursor:
+                yield self.decode_key(key), self.decode_value(value)
 
     def __contains__(self, key):
         try:
@@ -205,63 +275,22 @@ class Bigdict(MutableMapping):
             return False
 
     def __len__(self) -> int:
-        count = 0
-        it = self.db.iterkeys()
-        it.seek_to_first()
-        for _ in it:
-            count += 1
-        return count
+        if self._storage_version == 0:
+            count = 0
+            it = self.db.iterkeys()
+            it.seek_to_first()
+            for _ in it:
+                count += 1
+            return count
+        stat = self.db.stat()
+        return stat['entries']
 
     def __bool__(self) -> bool:
         return self.__len__() > 0
 
     def __delitem__(self, key):
         assert not self._read_only
-        self.db.delete(self.encode_key(key))
+        z = self._write_txn.delete(self.encode_key(key))
+        if not z:
+            raise KeyError(key)
         self._flushed = False
-
-    def view(self) -> "DictView":
-        return DictView(self.__class__(self.path, read_only=True))
-
-
-class DictView(Mapping):
-    # `types.MappingProxyType` could achieve similar effects,
-    # but it might be problematic when we send the object
-    # to another process. Plus, this separate class will have
-    # any flexibility that may be needed.
-
-    def __init__(self, dict_: Mapping):
-        self._dict = dict_
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}({repr(self._dict)})"
-
-    def __str__(self):
-        return self.__repr__()
-
-    def __getitem__(self, key):
-        return self._dict[key]
-
-    def get(self, key, default=None):
-        return self._dict.get(key, default)
-
-    def keys(self):
-        return self._dict.keys()
-
-    def values(self):
-        return self._dict.values()
-
-    def __iter__(self):
-        return self._dict.__iter__()
-
-    def items(self):
-        return self._dict.items()
-
-    def __contains__(self, key):
-        return self._dict.__contains__(key)
-
-    def __len__(self):
-        return self._dict.__len__()
-
-    def __bool__(self):
-        return self._dict.__bool__()

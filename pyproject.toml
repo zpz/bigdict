@@ -11,6 +11,7 @@ authors = [
 dependencies = [
     # "lbry-rocksdb",
     "rocksdb",
+    "lmdb",
 ]
 requires-python = ">=3.8"
 readme = "README.rst"
