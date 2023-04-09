@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0] - [2023-04-09]
+
+Major refactor to move storage engine from RocksDB to LMDB.
+While the reading of old datasets is supported for a while, API will evolve
+(including some breaking changes) with the new storage engine.
+
+### Removed
+
+- class `DictView`
+- method `clear`
+
+### Added
+
+- method `reload`
+
+
 ## [0.1.0] - [2023-04-07]
 
 - Revert dependency from `lbry-rocksdb` back to `rocksdb` because the former does not provide
