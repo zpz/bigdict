@@ -9,17 +9,6 @@ import warnings
 from collections.abc import MutableMapping
 
 import lmdb
-import rocksdb
-
-
-def rocks_opts(**kwargs):
-    opts = rocksdb.Options(**kwargs)
-    opts.table_factory = rocksdb.BlockBasedTableFactory(
-        filter_policy=rocksdb.BloomFilterPolicy(10),
-        block_cache=rocksdb.LRUCache(2 * (1024**3)),
-        block_cache_compressed=rocksdb.LRUCache(500 * (1024**2)),
-    )
-    return opts
 
 
 UNSET = object()
@@ -87,11 +76,9 @@ class Bigdict(MutableMapping):
         return self.__repr__()
 
     def __getstate__(self):
-        print('getstate')
         return self.path, self.info, self.read_only, self._keep_files
 
     def __setstate__(self, state):
-        print('state:', state)
         self.path, self.info, self.read_only, self._keep_files = state
         self._storage_version = self.info.get('storage_version', 0)
         self._dbs = {}
@@ -130,6 +117,17 @@ class Bigdict(MutableMapping):
     def _db(self, shard: str = '0'):
         if self._storage_version == 0:
             if not self._dbs.get('0'):
+                import rocksdb
+
+                def rocks_opts(**kwargs):
+                    opts = rocksdb.Options(**kwargs)
+                    opts.table_factory = rocksdb.BlockBasedTableFactory(
+                        filter_policy=rocksdb.BloomFilterPolicy(10),
+                        block_cache=rocksdb.LRUCache(2 * (1024**3)),
+                        block_cache_compressed=rocksdb.LRUCache(500 * (1024**2)),
+                    )
+                    return opts
+
                 self._dbs['0'] = rocksdb.DB(  # pylint: disable=no-member
                     os.path.join(self.path, "db"),
                     rocks_opts(**self.info["db_opts"], create_if_missing=False),
