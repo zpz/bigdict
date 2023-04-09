@@ -1,9 +1,19 @@
 # Changelog
 
-## [0.2.0] - in progress
+## [0.2.0] - [2023-04-09]
 
-- Change storage engine from RocksDB to LMDB.
-- Class `DictView` is removed.
+Major refactor to move storage engine from RocksDB to LMDB.
+While the reading of old datasets is supported for a while, API will evolve
+(including some breaking changes) with the new storage engine.
+
+### Removed
+
+- class `DictView`
+- method `clear`
+
+### Added
+
+- method `reload`
 
 
 ## [0.1.0] - [2023-04-07]
