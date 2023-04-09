@@ -1,7 +1,6 @@
 import multiprocessing
 import os
 import pickle
-import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
@@ -70,7 +69,9 @@ def test_bigdict():
     assert 'b' not in bd
     assert len(bd) == 3
 
-    assert sorted(bd.keys(), key=lambda k: bd.encode_key(k)) == sorted([9, ('a', 3), 'uid'], key=lambda k: bd.encode_key(k))
+    assert sorted(bd.keys(), key=lambda k: bd.encode_key(k)) == sorted(
+        [9, ('a', 3), 'uid'], key=lambda k: bd.encode_key(k)
+    )
 
     # deletion is not reflected in the other reader:
     assert bd2['b'] == 4

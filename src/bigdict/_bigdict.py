@@ -66,7 +66,9 @@ class Bigdict(MutableMapping):
 
         self._storage_version = self.info.get('storage_version', 0)
         if self._storage_version == 0:
-            warnings.warn("Support for RocksDB storage is deprecated. Please migrate this old dataset to the new format.")
+            warnings.warn(
+                "Support for RocksDB storage is deprecated. Please migrate this old dataset to the new format."
+            )
             if not read_only:
                 warnings.warn("older data with RocksDB backend is read-only")
                 read_only = True
@@ -134,7 +136,7 @@ class Bigdict(MutableMapping):
                     read_only=self.read_only,
                 )
             return self._dbs['0']
-    
+
         db = self._dbs.get(shard, None)
         if db is None:
             if self.read_only:
@@ -298,8 +300,8 @@ class Bigdict(MutableMapping):
             for _ in it:
                 count += 1
             return count
-    
-        # TODO: loop through all shards    
+
+        # TODO: loop through all shards
         stat = self._db('0').stat()
         return stat['entries']
 
