@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.1] - [2023-04-09]
+
+- Makes dependency on `rocksdb` optional.
+
+
 ## [0.2.0] - [2023-04-09]
 
 Major refactor to move storage engine from RocksDB to LMDB.
