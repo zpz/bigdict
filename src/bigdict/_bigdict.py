@@ -89,7 +89,8 @@ class Bigdict(MutableMapping):
         As a general principle, do not persist pickled custom class objects.
         If ``k`` is not of a "native" Python class like str, dict, etc.,
         subclass should customize this method to convert ``k`` to a native type
-        before pickling. Correspnoding customization should happen in :meth:`decode_key`.
+        before pickling (or convert to bytes in a whole diff way w/o pickling).
+        Correspnoding customization should happen in :meth:`decode_key`.
         '''
         return pickle.dumps(k)
 
@@ -101,9 +102,10 @@ class Bigdict(MutableMapping):
         As a general principle, do not persist pickled custom class objects.
         If ``v`` is not of a "native" Python class like str, dict, etc.,
         subclass should customize this method to convert ``v`` to a native type
-        before pickling. Correspnoding customization should happen in :meth:`decode_value`.
+        before pickling (or convert to bytes in a whole diff way w/o pickling).
+        Correspnoding customization should happen in :meth:`decode_value`.
         '''
-        return pickle.dumps(v)
+        return pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
 
     def decode_value(self, v: bytes):
         return pickle.loads(v)
