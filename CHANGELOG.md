@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2] - in progress
+
+### Added
+
+- method `setdefault`
+- method `commit`
+
+
 ## [0.2.1] - [2023-04-09]
 
 - Makes dependency on `rocksdb` optional.
