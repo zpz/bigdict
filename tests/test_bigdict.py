@@ -20,11 +20,13 @@ def test_bigdict():
 
     bd = Bigdict.new()
     bd['a'] = 3
-    bd['b'] = 4
     bd[9] = [1, 2, 'a']
     bd[('a', 3)] = {'a': 3, 'b': 4}
     uid = str(uuid4())
     bd['uid'] = uid
+
+    assert bd.setdefault('a', 4) == 3
+    assert bd.setdefault('b', 4) == 4
 
     with pytest.raises(KeyError):
         # Not available before flush:
