@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.2] - in progress
+
+### Added
+
+- method `setdefault`
+- method `commit`
+
+### Enhancements
+
+- Fix pickle protocol for ``encode_key``.
+
+
 ## [0.2.1] - [2023-04-09]
 
 - Makes dependency on `rocksdb` optional.

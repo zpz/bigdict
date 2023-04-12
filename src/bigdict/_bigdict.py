@@ -6,14 +6,13 @@ import shutil
 import tempfile
 import uuid
 import warnings
-from collections.abc import MutableMapping
 
 import lmdb
 
 UNSET = object()
 
 
-class Bigdict(MutableMapping):
+class Bigdict:
     @classmethod
     def new(
         cls,
@@ -60,6 +59,9 @@ class Bigdict(MutableMapping):
             if not read_only:
                 warnings.warn("older data with RocksDB backend is read-only")
                 read_only = True
+            self._key_pickle_protocol = 4
+        else:
+            self._key_pickle_protocol = 5
 
         self.read_only = read_only
         self._keep_files = True
@@ -80,6 +82,10 @@ class Bigdict(MutableMapping):
     def __setstate__(self, state):
         self.path, self.info, self.read_only, self._keep_files = state
         self._storage_version = self.info.get('storage_version', 0)
+        if self._storage_version == 0:
+            self._key_pickle_protocol = 4
+        else:
+            self._key_pickle_protocol = 5
         self._dbs = {}
         self._wtxns = {}
         self._rtxns = {}
@@ -89,21 +95,27 @@ class Bigdict(MutableMapping):
         As a general principle, do not persist pickled custom class objects.
         If ``k`` is not of a "native" Python class like str, dict, etc.,
         subclass should customize this method to convert ``k`` to a native type
-        before pickling. Correspnoding customization should happen in :meth:`decode_key`.
+        before pickling (or convert to bytes in a whole diff way w/o pickling).
+        Correspnoding customization should happen in :meth:`decode_key`.
         '''
-        return pickle.dumps(k)
+        # If reading an existing dataset, the key must be pickled by the same protocol
+        # that was used in the original writing, otherwise the key can not be found.
+        # That's why we fix the protocol here.
+        return pickle.dumps(k, protocol=self._key_pickle_protocol)
 
     def decode_key(self, k: bytes):
         return pickle.loads(k)
 
     def encode_value(self, v) -> bytes:
         '''
+
         As a general principle, do not persist pickled custom class objects.
         If ``v`` is not of a "native" Python class like str, dict, etc.,
         subclass should customize this method to convert ``v`` to a native type
-        before pickling. Correspnoding customization should happen in :meth:`decode_value`.
+        before pickling (or convert to bytes in a whole diff way w/o pickling).
+        Correspnoding customization should happen in :meth:`decode_value`.
         '''
-        return pickle.dumps(v)
+        return pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
 
     def decode_value(self, v: bytes):
         return pickle.loads(v)
@@ -237,6 +249,13 @@ class Bigdict(MutableMapping):
         value = self.decode_value(v)
         return value
 
+    def setdefault(self, key, value):
+        try:
+            return self[key]
+        except KeyError:
+            self[key] = value
+            return value
+
     def get(self, key, default=None):
         try:
             return self[key]
@@ -305,6 +324,19 @@ class Bigdict(MutableMapping):
     def __bool__(self) -> bool:
         return self.__len__() > 0
 
+    def commit(self):
+        '''
+        Commit and close all pending transactions.
+
+        :meth:`flush` is this ``commit`` plus saving the info file.
+        If you know ``self.info`` has not changed and the overhead of saving
+        the info file is significant in your use case (because for some reason
+        you need to commit writes frequently), you can call ``commit`` instead
+        of ``flush``.
+        '''
+        self._commit()
+        self._close()
+
     def flush(self):
         '''
         ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
@@ -314,8 +346,7 @@ class Bigdict(MutableMapping):
         before you'done writing or you need to read.
         '''
         assert not self.read_only
-        self._commit()
-        self._close()
+        self.commit()
         json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
 
     def destroy(self):
