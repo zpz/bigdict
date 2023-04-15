@@ -25,7 +25,9 @@ def test_bigdict():
     uid = str(uuid4())
     bd['uid'] = uid
 
-    assert bd.setdefault('a', 4) == 4  # the un-commited 'a' is invisible and hence overwritten
+    assert (
+        bd.setdefault('a', 4) == 4
+    )  # the un-commited 'a' is invisible and hence overwritten
     assert bd.setdefault('b', 4) == 4
 
     with pytest.raises(KeyError):
