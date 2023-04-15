@@ -1,11 +1,12 @@
 # Changelog
 
-## [0.2.2] - in progress
+## [0.2.2] - 2023-04-14
 
 ### Added
 
-- method `setdefault`
-- method `commit`
+- Method `setdefault`
+- Method `commit`
+- Method `rollback`
 
 ### Enhancements
 
