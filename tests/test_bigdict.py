@@ -25,7 +25,7 @@ def test_bigdict():
     uid = str(uuid4())
     bd['uid'] = uid
 
-    assert bd.setdefault('a', 4) == 3
+    assert bd.setdefault('a', 4) == 4  # the un-commited 'a' is invisible and hence overwritten
     assert bd.setdefault('b', 4) == 4
 
     with pytest.raises(KeyError):
@@ -36,7 +36,9 @@ def test_bigdict():
     assert len(bd) == 0
 
     bd.flush()
-    assert bd['a'] == 3
+    assert bd['a'] == 4
+    assert bd.setdefault('a', 5) == 4
+    assert bd['b'] == 4
     assert len(bd) == 5
 
     bd['a'] = 'a'
@@ -88,6 +90,35 @@ def test_bigdict():
 
     assert len(bd2) == 3
     bd.destroy()
+
+
+def test_rollback():
+    db = Bigdict.new()
+    db['a'] = 3
+    db['b'] = 4
+    db.flush()
+
+    try:
+        db['c'] = 9
+        db['d'] = 10
+        raise ValueError(3)
+    except Exception:
+        db.rollback()
+    else:
+        db.commit()
+
+    assert 'c' not in db
+    assert 'd' not in db
+    db.commit()
+    assert 'c' not in db
+    assert 'd' not in db
+
+    db['c'] = 9
+    db['d'] = 10
+    db.commit()
+    assert 'c' in db
+    db.rollback()
+    assert 'd' in db
 
 
 def test_compat():

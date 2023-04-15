@@ -4,8 +4,9 @@
 
 ### Added
 
-- method `setdefault`
-- method `commit`
+- Method `setdefault`
+- Method `commit`
+- Method `rollback`
 
 ### Enhancements
 

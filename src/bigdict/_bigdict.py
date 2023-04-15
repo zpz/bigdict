@@ -337,6 +337,16 @@ class Bigdict:
         self._commit()
         self._close()
 
+    def rollback(self):
+        '''
+        Rollback un-committed write transactions.
+
+        Note: this does not affect changes to ``self.info``.
+        '''
+        for x in self._wtxns.values():
+            x.abort()
+        self._wtxns = {}
+
     def flush(self):
         '''
         ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
