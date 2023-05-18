@@ -224,3 +224,11 @@ def test_thread():
         sleep(0.1)
 
         task.result()
+
+
+def test_destroy():
+    data = Bigdict.new(keep_files=True)
+    data[1] = 'a'
+    data[2] = 'b'
+    data.flush()
+    data.destroy()

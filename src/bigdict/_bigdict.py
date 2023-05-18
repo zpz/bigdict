@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import os.path
@@ -17,6 +19,8 @@ class Bigdict:
     def new(
         cls,
         path: str = None,
+        *,
+        keep_files: bool | None = None
     ):
         info = {
             "storage_version": 1,
@@ -29,10 +33,12 @@ class Bigdict:
         }
 
         if path is None:
-            keep_files = False
+            if keep_files is None:
+                keep_files = False
             path = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
         else:
-            keep_files = True
+            if keep_files is None:
+                keep_files = True
         path = os.path.abspath(path)
         assert not os.path.isdir(path)
         os.makedirs(path)
@@ -97,6 +103,9 @@ class Bigdict:
         subclass should customize this method to convert ``k`` to a native type
         before pickling (or convert to bytes in a whole diff way w/o pickling).
         Correspnoding customization should happen in :meth:`decode_key`.
+
+        If ``k`` is str, you may want to override ``encode_key`` and ``decode_key``
+        to use string ``decode``/``encode`` rather than pickling.
         '''
         # If reading an existing dataset, the key must be pickled by the same protocol
         # that was used in the original writing, otherwise the key can not be found.
@@ -108,7 +117,6 @@ class Bigdict:
 
     def encode_value(self, v) -> bytes:
         '''
-
         As a general principle, do not persist pickled custom class objects.
         If ``v`` is not of a "native" Python class like str, dict, etc.,
         subclass should customize this method to convert ``v`` to a native type
@@ -370,6 +378,7 @@ class Bigdict:
             delattr(self, 'info')
         except AttributeError:
             pass
+        self._keep_files = False  # to prevent issues in subsequent ``__del__``.
 
     def reload(self):
         '''
