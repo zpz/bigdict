@@ -16,12 +16,7 @@ UNSET = object()
 
 class Bigdict:
     @classmethod
-    def new(
-        cls,
-        path: str = None,
-        *,
-        keep_files: bool | None = None
-    ):
+    def new(cls, path: str = None, *, keep_files: bool | None = None):
         info = {
             "storage_version": 1,
             # `storage_version = 1` is introduced in release 0.2.0.
