@@ -16,7 +16,7 @@ UNSET = object()
 
 class Bigdict:
     @classmethod
-    def new(cls, path: str = None, *, keep_files: bool | None = None):
+    def new(cls, path: str = None, *, keep_files: bool | None = None, **kwargs):
         info = {
             "storage_version": 1,
             # `storage_version = 1` is introduced in release 0.2.0.
@@ -39,15 +39,25 @@ class Bigdict:
         os.makedirs(path)
 
         json.dump(info, open(os.path.join(path, "info.json"), "w"))
-        z = cls(path, read_only=False)
+        z = cls(path, read_only=False, **kwargs)
         z._keep_files = keep_files
         return z
 
     def __init__(
         self,
         path: str,
+        *,
         read_only: bool = False,
+        map_size: int = 1073741824,  # 2**30, or 1Gb
+        lmdb_env_config: dict = None,
     ):
+        '''
+        Parameters
+        ----------
+        lmdb_env_config
+            Additional named arguments to `lmdb.Environment <https://lmdb.readthedocs.io/en/release/#lmdb.Environment>`_
+            for experimentations.
+        '''
         self.path = path
 
         self.info = json.load(open(os.path.join(path, "info.json"), "r"))
@@ -66,6 +76,13 @@ class Bigdict:
 
         self.read_only = read_only
         self._keep_files = True
+
+        self._lmdb_env_config = {
+            'subdir': True,
+            'readahead': False,
+            **(lmdb_env_config or {}),
+            'map_size': map_size,
+        }
 
         self._dbs = {}  # environments
         self._wtxns = {}  # write transactions
@@ -154,24 +171,23 @@ class Bigdict:
             if self.read_only:
                 db = lmdb.Environment(
                     os.path.join(self.path, 'db', shard),
-                    subdir=True,
                     create=False,
                     readonly=True,
-                    readahead=False,
+                    **self._lmdb_env_config,
                 )
             else:
                 os.makedirs(os.path.join(self.path, 'db', shard), exist_ok=True)
                 db = lmdb.Environment(
                     os.path.join(self.path, 'db', shard),
-                    subdir=True,
                     readonly=False,
                     writemap=True,
-                    readahead=False,
+                    **self._lmdb_env_config,
                 )
             self._dbs[shard] = db
         return db
 
     def _write_txn(self, shard: str = '0'):
+        # TODO: check out the `buffers` parameter to ``lmdb.Transaction``.
         if shard not in self._wtxns:
             txn = lmdb.Transaction(self._db(shard), write=True)
             txn.__enter__()
@@ -179,6 +195,7 @@ class Bigdict:
         return self._wtxns[shard]
 
     def _read_txn(self, shard: str = '0'):
+        # TODO: check out the `buffers` parameter to ``lmdb.Transaction``.
         if shard not in self._rtxns:
             txn = lmdb.Transaction(self._db(shard), write=False)
             txn.__enter__()
