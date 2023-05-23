@@ -48,7 +48,6 @@ class Bigdict:
         path: str,
         *,
         read_only: bool = False,
-        map_size: int = 1073741824,  # 2**30, or 1Gb
         lmdb_env_config: dict = None,
     ):
         '''
@@ -80,8 +79,8 @@ class Bigdict:
         self._lmdb_env_config = {
             'subdir': True,
             'readahead': False,
+            'map_size': 1073741824,  # 2**30, or 1GB
             **(lmdb_env_config or {}),
-            'map_size': map_size,
         }
 
         self._dbs = {}  # environments
