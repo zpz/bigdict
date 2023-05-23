@@ -95,10 +95,22 @@ class Bigdict:
         return self.__repr__()
 
     def __getstate__(self):
-        return self.path, self.info, self.read_only, self._keep_files, self._lmdb_env_config
+        return (
+            self.path,
+            self.info,
+            self.read_only,
+            self._keep_files,
+            self._lmdb_env_config,
+        )
 
     def __setstate__(self, state):
-        self.path, self.info, self.read_only, self._keep_files, self._lmdb_env_config = state
+        (
+            self.path,
+            self.info,
+            self.read_only,
+            self._keep_files,
+            self._lmdb_env_config,
+        ) = state
         self._storage_version = self.info.get('storage_version', 0)
         if self._storage_version == 0:
             self._key_pickle_protocol = 4
