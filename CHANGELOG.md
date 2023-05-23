@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.4] - 2023-05-22
+
+- Allow customizing ``lmdb.Environment`` config by additional args passed to ``__init__`` and ``new``.
+
+
 ## [0.2.3] - 2023-05-17
 
 - Small bug fix.
