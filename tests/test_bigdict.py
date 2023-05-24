@@ -14,6 +14,10 @@ def test_bigdict():
     bd = Bigdict.new()
     print(bd)
 
+    assert list(bd.keys()) == []
+    assert list(bd.values()) == []
+    assert list(bd.items()) == []
+
     bd['a'] = 3
     bd['b'] = 4
     bd.destroy()
@@ -232,3 +236,22 @@ def test_destroy():
     data[2] = 'b'
     data.flush()
     data.destroy()
+
+
+def test_shard():
+    N = 1000
+    db = Bigdict.new(shard_level=16)
+    data = [str(uuid4()) for _ in range(N)]
+    for d in data:
+        db[d] = d
+    db.flush()
+
+    assert len(db._shards()) == 16
+    assert len(db) == N
+
+    for d in data:
+        assert db[d] == d
+
+    assert sorted(data) == sorted(db)  # calls `db.keys()`
+    assert sorted(data) == sorted(db.values())
+
