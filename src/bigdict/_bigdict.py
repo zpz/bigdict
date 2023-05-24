@@ -102,9 +102,13 @@ class Bigdict:
         self._lmdb_env_config = {
             'subdir': True,
             'readahead': False,
-            'map_size': 1073741824,  # 2**30, or 1GB
+            'map_size': 67108864,  # 64 MB; 1073741824 is 2**30, or 1GB
             **(lmdb_env_config or {}),
         }
+
+        # The size of the file `self.path / 'db' / '0' / 'data.mdb'` will display
+        # the `map_size` value; I don't know whether it's really the physical size
+        # even if we haven't put much data in it.
 
         self._dbs = {}  # environments
         self._wtxns = {}  # write transactions
