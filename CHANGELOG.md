@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.6] - 2023-05-24
+
+- Add support for sharding via the parameter ``shard_level`` to ``Bigdict.new``.
+- Change default ``map_size`` to 64 MB.
+
+
 ## [0.2.5] - 2023-05-22
 
 - Allow customizing ``lmdb.Environment`` config by additional args passed to ``__init__`` and ``new``.

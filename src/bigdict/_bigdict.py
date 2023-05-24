@@ -16,15 +16,35 @@ UNSET = object()
 
 class Bigdict:
     @classmethod
-    def new(cls, path: str = None, *, keep_files: bool | None = None, **kwargs):
+    def new(
+        cls,
+        path: str = None,
+        *,
+        keep_files: bool | None = None,
+        shard_level: int = 0,
+        **kwargs,
+    ):
+        '''
+        Parameters
+        ----------
+        shard_level
+            Indicates how many "shards"" will be used to store the data.
+            Default ``0`` means a single one; ``1`` has the same effect.
+            Other accepted values include ``8``, ``16``, ``32``, ``64``, ``128``, ``256``.
+
+            The shards will be named "0", "1", "2", etc.
+            They are directories under ``self.path / 'db'``.
+            Data elements will be assigned to the shards in a deterministic
+            and hopefully balanced way.
+        '''
+        assert shard_level in (0, 1, 8, 16, 32, 64, 128, 256)
         info = {
             "storage_version": 1,
             # `storage_version = 1` is introduced in release 0.2.0.
             # It was missing before that, and treated as 0.
             # Version 0 used a RocksDB backend;
             # version 1 uses a LMDB backend.
-            "shard_level": 0,
-            # Other values will be allowed later.
+            "shard_level": shard_level,
         }
 
         if path is None:
@@ -57,7 +77,7 @@ class Bigdict:
             Additional named arguments to `lmdb.Environment <https://lmdb.readthedocs.io/en/release/#lmdb.Environment>`_
             for experimentations.
         '''
-        self.path = path
+        self.path = os.path.abspath(path)
 
         self.info = json.load(open(os.path.join(path, "info.json"), "r"))
 
@@ -73,15 +93,22 @@ class Bigdict:
         else:
             self._key_pickle_protocol = 5
 
+        self._shard_level = self.info.get('shard_level', 0)
+        # DO NOT EVER manually modify ``self._storage_version`` and ``self._shard_level``.
+
         self.read_only = read_only
         self._keep_files = True
 
         self._lmdb_env_config = {
             'subdir': True,
             'readahead': False,
-            'map_size': 1073741824,  # 2**30, or 1GB
+            'map_size': 67108864,  # 64 MB; 1073741824 is 2**30, or 1GB
             **(lmdb_env_config or {}),
         }
+
+        # The size of the file `self.path / 'db' / '0' / 'data.mdb'` will display
+        # the `map_size` value; I don't know whether it's really the physical size
+        # even if we haven't put much data in it.
 
         self._dbs = {}  # environments
         self._wtxns = {}  # write transactions
@@ -115,6 +142,7 @@ class Bigdict:
             self._key_pickle_protocol = 4
         else:
             self._key_pickle_protocol = 5
+        self._shard_level = self.info.get('shard_level', 0)
         self._dbs = {}
         self._wtxns = {}
         self._rtxns = {}
@@ -151,10 +179,52 @@ class Bigdict:
     def decode_value(self, v: bytes):
         return pickle.loads(v)
 
+    def _shards(self) -> list[str]:
+        if self._shard_level <= 1:
+            return ['0']
+
+        files = []
+        try:
+            for f in os.listdir(os.path.join(self.path, 'db')):
+                try:
+                    f = int(f)
+                except ValueError:
+                    pass
+                else:
+                    files.append(f)
+            if files:
+                files = [str(f) for f in sorted(files)]
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        return files
+
     def _shard(self, key: bytes) -> str:
         # When `shard_level` supports >0 values,
         # this could return other values.
-        return '0'
+        sv = self._storage_version
+        sl = self._shard_level
+        if sv < 1 or sl <= 1:
+            return '0'
+        if sv == 1:
+            if len(key) == 0:  # TODO: should we allow empty key value?
+                return '0'
+            base = hash(key)  # TODO: is ``hash`` stable across Python versions?
+            if sl == 8:
+                base &= 0b111  # keep the right-most 3 bits, 0 ~ 7
+            elif sl == 16:
+                base &= 0b1111  # keep the right-most 4 bits, 0 ~ 15
+            elif sl == 32:
+                base &= 0b11111  # keep the right-most 5 bits, 0 ~ 31
+            elif sl == 64:
+                base &= 0b111111  # keep the right-most 6 bits, 0 ~ 63
+            elif sl == 128:
+                base &= 0b1111111  # keep the right-most 7 bits, 0 ~ 127
+            elif sl == 256:
+                pass  # keep all 8 bits, 0 ~ 255
+            else:
+                raise ValueError(f"shard-level {sl}")
+            return str(int(base))
+        return ValueError(f"storage-version {sv}")
 
     def _db(self, shard: str = '0'):
         if self._storage_version == 0:
@@ -300,10 +370,10 @@ class Bigdict:
             for key in it:
                 yield self.decode_key(key)
         else:
-            # TODO: loop through all shards
-            cursor = self._read_txn('0').cursor()
-            for k in cursor.iternext(keys=True, values=False):
-                yield self.decode_key(k)
+            for shard in self._shards():
+                cursor = self._read_txn(shard).cursor()
+                for k in cursor.iternext(keys=True, values=False):
+                    yield self.decode_key(k)
 
     def values(self):
         if self._storage_version == 0:
@@ -312,10 +382,10 @@ class Bigdict:
             for value in it:
                 yield self.decode_value(value)
         else:
-            # TODO: loop through all shards
-            cursor = self._read_txn('0').cursor()
-            for v in cursor.iternext(keys=False, values=True):
-                yield self.decode_value(v)
+            for shard in self._shards():
+                cursor = self._read_txn(shard).cursor()
+                for v in cursor.iternext(keys=False, values=True):
+                    yield self.decode_value(v)
 
     def __iter__(self):
         return self.keys()
@@ -327,10 +397,10 @@ class Bigdict:
             for key, value in it:
                 yield self.decode_key(key), self.decode_value(value)
         else:
-            # TODO: loop through all shards
-            cursor = self._read_txn('0').cursor()
-            for key, value in cursor.iternext(keys=True, values=True):
-                yield self.decode_key(key), self.decode_value(value)
+            for shard in self._shards():
+                cursor = self._read_txn(shard).cursor()
+                for key, value in cursor.iternext(keys=True, values=True):
+                    yield self.decode_key(key), self.decode_value(value)
 
     def __contains__(self, key):
         try:
@@ -348,12 +418,26 @@ class Bigdict:
                 count += 1
             return count
 
-        # TODO: loop through all shards
-        stat = self._db('0').stat()
-        return stat['entries']
+        n = 0
+        for shard in self._shards():
+            stat = self._db(shard).stat()
+            n += stat['entries']
+        return n
 
     def __bool__(self) -> bool:
-        return self.__len__() > 0
+        if self._storage_version == 0:
+            it = self._db().iterkeys()
+            it.seek_to_first()
+            for _ in it:
+                return True
+            return False
+
+        for shard in self._shards():
+            stat = self._db(shard).stat()
+            n = stat['entries']
+            if n:
+                return True
+        return False
 
     def commit(self):
         '''
