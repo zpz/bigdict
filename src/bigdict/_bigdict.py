@@ -16,7 +16,14 @@ UNSET = object()
 
 class Bigdict:
     @classmethod
-    def new(cls, path: str = None, *, keep_files: bool | None = None, shard_level: int = 0, **kwargs):
+    def new(
+        cls,
+        path: str = None,
+        *,
+        keep_files: bool | None = None,
+        shard_level: int = 0,
+        **kwargs,
+    ):
         '''
         Parameters
         ----------
@@ -199,17 +206,17 @@ class Bigdict:
                 return '0'
             base = hash(key)  # TODO: is ``hash`` stable across Python versions?
             if sl == 8:
-                base &= 0b111      # keep the right-most 3 bits, 0 ~ 7
+                base &= 0b111  # keep the right-most 3 bits, 0 ~ 7
             elif sl == 16:
-                base &= 0b1111     # keep the right-most 4 bits, 0 ~ 15
+                base &= 0b1111  # keep the right-most 4 bits, 0 ~ 15
             elif sl == 32:
-                base &= 0b11111    # keep the right-most 5 bits, 0 ~ 31
+                base &= 0b11111  # keep the right-most 5 bits, 0 ~ 31
             elif sl == 64:
-                base &= 0b111111   # keep the right-most 6 bits, 0 ~ 63
+                base &= 0b111111  # keep the right-most 6 bits, 0 ~ 63
             elif sl == 128:
                 base &= 0b1111111  # keep the right-most 7 bits, 0 ~ 127
             elif sl == 256:
-                pass               # keep all 8 bits, 0 ~ 255
+                pass  # keep all 8 bits, 0 ~ 255
             else:
                 raise ValueError(f"shard-level {sl}")
             return str(int(base))
