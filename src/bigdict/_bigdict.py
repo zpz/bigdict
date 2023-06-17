@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import uuid
 import warnings
+import shutil
 
 import lmdb
 
@@ -106,9 +107,16 @@ class Bigdict:
             **(lmdb_env_config or {}),
         }
 
-        # The size of the file `self.path / 'db' / '0' / 'data.mdb'` will display
-        # the `map_size` value; I don't know whether it's really the physical size
-        # even if we haven't put much data in it.
+        # On Windows and possibly Mac, the database file (in `self.path / 'db' / '0' )
+        # size is set to to equal to ``map_size`` upfront,
+        # hence you should not set an unnecessarily large ``map_size``.
+        # On Linux, the database file size grows as needed by the actual data, hence setting a generously
+        # large ``map_size`` is not too bad.
+        #   https://groups.google.com/g/caffe-users/c/0RKsTTYRGpQ?pli=1
+        #   https://openldap.org/lists/openldap-technical/201511/msg00101.html
+        #   https://openldap.org/lists/openldap-technical/201511/msg00107.html
+
+        # Try to avoid using this package on Windows!
 
         self._dbs = {}  # environments
         self._wtxns = {}  # write transactions
@@ -494,3 +502,37 @@ class Bigdict:
         '''
         self._close()
         self.info = json.load(open(os.path.join(self.path, "info.json"), "r"))
+
+    def compress(self):
+        self.flush()
+        for shard in self._shards():
+            path_current = os.path.join(self.path, 'db', shard)
+            path_new = os.path.join(self.path, 'db', shard + '-new')
+
+            db = self._db(shard)
+            n_current = db.stat()['entries']
+
+            os.mkdir(path_new)
+            db.copy(path_new, compact=True)
+            db_new = None
+            try:
+                db_new = lmdb.Environment(
+                    os.path.join(self.path, 'db', shard + '-new'),
+                    create=False,
+                    readonly=True,
+                    **self._lmdb_env_config,
+                )
+                n_new = db_new.stat()['entries']
+                assert n_new == n_current
+            except BaseException:
+                del db_new
+                shutil.rmtree(path_new)
+                raise
+            else:
+                del self._dbs[shard]
+                shutil.rmtree(path_current)
+                os.rename(path_new, path_current)
+
+        # TODO: report before- and after- total file sizes
+        self.flush()
+
