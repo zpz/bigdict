@@ -8,7 +8,6 @@ import shutil
 import tempfile
 import uuid
 import warnings
-import shutil
 
 import lmdb
 
@@ -535,4 +534,3 @@ class Bigdict:
 
         # TODO: report before- and after- total file sizes
         self.flush()
-
