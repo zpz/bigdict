@@ -239,7 +239,7 @@ def test_destroy():
 
 
 def test_shard():
-    N = 1000
+    N = 10000
     db = Bigdict.new(shard_level=16)
     data = [str(uuid4()) for _ in range(N)]
     for d in data:
@@ -251,6 +251,14 @@ def test_shard():
 
     for d in data:
         assert db[d] == d
+
+    assert sorted(data) == sorted(db)  # calls `db.keys()`
+    assert sorted(data) == sorted(db.values())
+
+    db.compact()
+    assert not db._dbs
+    assert not db._wtxns
+    assert not db._rtxns
 
     assert sorted(data) == sorted(db)  # calls `db.keys()`
     assert sorted(data) == sorted(db.values())

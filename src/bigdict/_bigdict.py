@@ -45,6 +45,7 @@ class Bigdict:
             # Version 0 used a RocksDB backend;
             # version 1 uses a LMDB backend.
             "shard_level": shard_level,
+            "key_pickle_protocol": 5,  # Added in 0.2.7. Record this to ensure consistency between insert and query times.
         }
 
         if path is None:
@@ -91,7 +92,8 @@ class Bigdict:
                 read_only = True
             self._key_pickle_protocol = 4
         else:
-            self._key_pickle_protocol = 5
+            self._key_pickle_protocol = self.info.get('key_pickle_protocol', 5)
+            # This value is in `self.info` starting with 0.2.7.
 
         self._shard_level = self.info.get('shard_level', 0)
         # DO NOT EVER manually modify ``self._storage_version`` and ``self._shard_level``.
@@ -106,9 +108,16 @@ class Bigdict:
             **(lmdb_env_config or {}),
         }
 
-        # The size of the file `self.path / 'db' / '0' / 'data.mdb'` will display
-        # the `map_size` value; I don't know whether it's really the physical size
-        # even if we haven't put much data in it.
+        # On Windows and possibly Mac, the database file (in `self.path / 'db' / '0' )
+        # size is set to to equal to ``map_size`` upfront,
+        # hence you should not set an unnecessarily large ``map_size``.
+        # On Linux, the database file size grows as needed by the actual data, hence setting a generously
+        # large ``map_size`` is not too bad.
+        #   https://groups.google.com/g/caffe-users/c/0RKsTTYRGpQ?pli=1
+        #   https://openldap.org/lists/openldap-technical/201511/msg00101.html
+        #   https://openldap.org/lists/openldap-technical/201511/msg00107.html
+
+        # Try to avoid using this package on Windows!
 
         self._dbs = {}  # environments
         self._wtxns = {}  # write transactions
@@ -126,6 +135,7 @@ class Bigdict:
             self.info,
             self.read_only,
             self._keep_files,
+            self._key_pickle_protocol,
             self._lmdb_env_config,
         )
 
@@ -135,49 +145,22 @@ class Bigdict:
             self.info,
             self.read_only,
             self._keep_files,
+            self._key_pickle_protocol,
             self._lmdb_env_config,
         ) = state
         self._storage_version = self.info.get('storage_version', 0)
-        if self._storage_version == 0:
-            self._key_pickle_protocol = 4
-        else:
-            self._key_pickle_protocol = 5
         self._shard_level = self.info.get('shard_level', 0)
         self._dbs = {}
         self._wtxns = {}
         self._rtxns = {}
 
-    def encode_key(self, k) -> bytes:
-        '''
-        As a general principle, do not persist pickled custom class objects.
-        If ``k`` is not of a "native" Python class like str, dict, etc.,
-        subclass should customize this method to convert ``k`` to a native type
-        before pickling (or convert to bytes in a whole diff way w/o pickling).
-        Correspnoding customization should happen in :meth:`decode_key`.
-
-        If ``k`` is str, you may want to override ``encode_key`` and ``decode_key``
-        to use string ``decode``/``encode`` rather than pickling.
-        '''
-        # If reading an existing dataset, the key must be pickled by the same protocol
-        # that was used in the original writing, otherwise the key can not be found.
-        # That's why we fix the protocol here.
-        return pickle.dumps(k, protocol=self._key_pickle_protocol)
-
-    def decode_key(self, k: bytes):
-        return pickle.loads(k)
-
-    def encode_value(self, v) -> bytes:
-        '''
-        As a general principle, do not persist pickled custom class objects.
-        If ``v`` is not of a "native" Python class like str, dict, etc.,
-        subclass should customize this method to convert ``v`` to a native type
-        before pickling (or convert to bytes in a whole diff way w/o pickling).
-        Correspnoding customization should happen in :meth:`decode_value`.
-        '''
-        return pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
-
-    def decode_value(self, v: bytes):
-        return pickle.loads(v)
+    def __del__(self):
+        if self.read_only:
+            return
+        if self._keep_files:
+            self.flush()
+        else:
+            self.destroy()
 
     def _shards(self) -> list[str]:
         if self._shard_level <= 1:
@@ -224,7 +207,28 @@ class Bigdict:
             else:
                 raise ValueError(f"shard-level {sl}")
             return str(int(base))
-        return ValueError(f"storage-version {sv}")
+        raise ValueError(f"storage-version {sv}")
+
+    def _env(self, shard: str, *, readonly=None, **config):
+        conf = {**self._lmdb_env_config, **config}
+        if readonly is None:
+            readonly = self.read_only
+        if readonly:
+            db = lmdb.Environment(
+                os.path.join(self.path, 'db', shard),
+                create=False,
+                readonly=True,
+                **conf,
+            )
+        else:
+            os.makedirs(os.path.join(self.path, 'db', shard), exist_ok=True)
+            db = lmdb.Environment(
+                os.path.join(self.path, 'db', shard),
+                readonly=False,
+                writemap=True,
+                **conf,
+            )
+        return db
 
     def _db(self, shard: str = '0'):
         if self._storage_version == 0:
@@ -249,21 +253,7 @@ class Bigdict:
 
         db = self._dbs.get(shard, None)
         if db is None:
-            if self.read_only:
-                db = lmdb.Environment(
-                    os.path.join(self.path, 'db', shard),
-                    create=False,
-                    readonly=True,
-                    **self._lmdb_env_config,
-                )
-            else:
-                os.makedirs(os.path.join(self.path, 'db', shard), exist_ok=True)
-                db = lmdb.Environment(
-                    os.path.join(self.path, 'db', shard),
-                    readonly=False,
-                    writemap=True,
-                    **self._lmdb_env_config,
-                )
+            db = self._env(shard)
             self._dbs[shard] = db
         return db
 
@@ -289,6 +279,9 @@ class Bigdict:
         self._wtxns = {}
 
     def _close(self):
+        '''
+        Close without commit.
+        '''
         if self._storage_version == 0:
             return
         for x in self._wtxns.values():
@@ -303,13 +296,60 @@ class Bigdict:
             x.close()
         self._dbs = {}
 
-    def __del__(self):
-        if self.read_only:
-            return
-        if self._keep_files:
-            self.flush()
-        else:
-            self.destroy()
+    def commit(self):
+        '''
+        Commit and close all pending transactions.
+
+        :meth:`flush` is this ``commit`` plus saving the info file.
+        If you know ``self.info`` has not changed and the overhead of saving
+        the info file is significant in your use case (because for some reason
+        you need to commit writes frequently), you can call ``commit`` instead
+        of ``flush``.
+        '''
+        self._commit()
+        self._close()
+
+    def rollback(self):
+        '''
+        Rollback un-committed write transactions.
+
+        Note: this does not affect changes to ``self.info``.
+        '''
+        for x in self._wtxns.values():
+            x.abort()
+        self._wtxns = {}
+
+    def encode_key(self, k) -> bytes:
+        '''
+        As a general principle, do not persist pickled custom class objects.
+        If ``k`` is not of a "native" Python class like str, dict, etc.,
+        subclass should customize this method to convert ``k`` to a native type
+        before pickling (or convert to bytes in a whole diff way w/o pickling).
+        Correspnoding customization should happen in :meth:`decode_key`.
+
+        If ``k`` is str, you may want to override ``encode_key`` and ``decode_key``
+        to use string ``decode``/``encode`` rather than pickling.
+        '''
+        # If reading an existing dataset, the key must be pickled by the same protocol
+        # that was used in the original writing, otherwise the key can not be found.
+        # That's why we fix the protocol here.
+        return pickle.dumps(k, protocol=self._key_pickle_protocol)
+
+    def decode_key(self, k: bytes):
+        return pickle.loads(k)
+
+    def encode_value(self, v) -> bytes:
+        '''
+        As a general principle, do not persist pickled custom class objects.
+        If ``v`` is not of a "native" Python class like str, dict, etc.,
+        subclass should customize this method to convert ``v`` to a native type
+        before pickling (or convert to bytes in a whole diff way w/o pickling).
+        Correspnoding customization should happen in :meth:`decode_value`.
+        '''
+        return pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def decode_value(self, v: bytes):
+        return pickle.loads(v)
 
     def __setitem__(self, key, value):
         assert not self.read_only
@@ -439,29 +479,6 @@ class Bigdict:
                 return True
         return False
 
-    def commit(self):
-        '''
-        Commit and close all pending transactions.
-
-        :meth:`flush` is this ``commit`` plus saving the info file.
-        If you know ``self.info`` has not changed and the overhead of saving
-        the info file is significant in your use case (because for some reason
-        you need to commit writes frequently), you can call ``commit`` instead
-        of ``flush``.
-        '''
-        self._commit()
-        self._close()
-
-    def rollback(self):
-        '''
-        Rollback un-committed write transactions.
-
-        Note: this does not affect changes to ``self.info``.
-        '''
-        for x in self._wtxns.values():
-            x.abort()
-        self._wtxns = {}
-
     def flush(self):
         '''
         ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
@@ -494,3 +511,67 @@ class Bigdict:
         '''
         self._close()
         self.info = json.load(open(os.path.join(self.path, "info.json"), "r"))
+
+    def compact(self):
+        '''
+        Perform a "copy with compaction" on the dataset.
+        If successful, the older data files will be replaced by new ones.
+        If unsuccessful, the first failing shard will be left unchanged, and the exception is raised.
+
+        This could reduce file size considerably if
+
+            - the dataset is huge
+            - you have conducted a lot of writing since the last call to ``compact``
+
+        This is an expensive operation. Don't do this often. You may want to do this
+        at the end of a long writing session, and just before you are about to transfer
+        the dataset files to another storage media.
+        '''
+        self.flush()
+        size_old = 0  # bytes
+        size_new = 0  # bytes
+
+        def get_folder_size(folder):
+            s = 0
+            for file in os.scandir(folder):
+                s += os.path.getsize(file)
+            return s
+
+        for shard in self._shards():
+            shard_new = shard + '-new'
+            path_new = os.path.join(self.path, 'db', shard_new)
+
+            db = self._env(shard)
+            os.mkdir(path_new)
+            db.copy(path_new, compact=True)
+
+            try:
+                db_new = self._env(shard_new, readonly=True)
+            except Exception:
+                shutil.rmtree(path_new)
+                db.close()
+                raise
+            else:
+                n = db.stat()['entries']
+                n_new = db_new.stat()['entries']
+                db.close()
+                db_new.close()
+                if n_new == n:
+                    path = os.path.join(self.path, 'db', shard)
+                    size_old += get_folder_size(path)
+                    shutil.rmtree(path)
+                    os.rename(path_new, path)
+                    size_new += get_folder_size(path)
+                else:
+                    shutil.rmtree(path_new)
+                    raise RuntimeError(
+                        f'expecting {n} entries but got {n_new} for shard "{shard}"'
+                    )
+
+        mb = 1048576  # 2**20
+        size_old /= mb
+        size_new /= mb
+
+        print(
+            f"Finished compressing LMDB dataset at '{self.path}' from {size_old:.2f} MB to {size_new:.2f} MB."
+        )

@@ -1,7 +1,7 @@
 '''
 Bigdict
 '''
-__version__ = "0.2.6"
+__version__ = "0.2.7b1"
 
 from ._bigdict import Bigdict
 
