@@ -255,7 +255,7 @@ def test_shard():
     assert sorted(data) == sorted(db)  # calls `db.keys()`
     assert sorted(data) == sorted(db.values())
 
-    db.compress()
+    db.compact()
     assert not db._dbs
     assert not db._wtxns
     assert not db._rtxns

@@ -2,7 +2,7 @@
 
 ## [0.2.7] - in progress
 
-- New method ``compress``.
+- New method ``compact``.
 
 
 ## [0.2.6] - 2023-05-24

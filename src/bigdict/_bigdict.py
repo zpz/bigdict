@@ -479,7 +479,6 @@ class Bigdict:
                 return True
         return False
 
-
     def flush(self):
         '''
         ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
@@ -513,7 +512,7 @@ class Bigdict:
         self._close()
         self.info = json.load(open(os.path.join(self.path, "info.json"), "r"))
 
-    def compress(self):
+    def compact(self):
         '''
         Perform a "copy with compaction" on the dataset.
         If successful, the older data files will be replaced by new ones.
@@ -556,10 +555,14 @@ class Bigdict:
                     size_new += get_folder_size(path)
                 else:
                     shutil.rmtree(path_new)
-                    raise RuntimeError(f'expecting {n} entries but got {n_new} for shard "{shard}"')
+                    raise RuntimeError(
+                        f'expecting {n} entries but got {n_new} for shard "{shard}"'
+                    )
 
         mb = 1048576  # 2**20
         size_old /= mb
         size_new /= mb
 
-        print(f"Finished compressing LMDB dataset at '{self.path}' from {size_old:.2f} MB to {size_new:.2f} MB.")
+        print(
+            f"Finished compressing LMDB dataset at '{self.path}' from {size_old:.2f} MB to {size_new:.2f} MB."
+        )
