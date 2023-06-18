@@ -45,6 +45,7 @@ class Bigdict:
             # Version 0 used a RocksDB backend;
             # version 1 uses a LMDB backend.
             "shard_level": shard_level,
+            "key_pickle_protocol": 5,  # Added in 0.2.7. Record this to ensure consistency between insert and query times.
         }
 
         if path is None:
@@ -91,7 +92,8 @@ class Bigdict:
                 read_only = True
             self._key_pickle_protocol = 4
         else:
-            self._key_pickle_protocol = 5
+            self._key_pickle_protocol = self.info.get('key_pickle_protocol', 5)
+            # This value is in `self.info` starting with 0.2.7.
 
         self._shard_level = self.info.get('shard_level', 0)
         # DO NOT EVER manually modify ``self._storage_version`` and ``self._shard_level``.
@@ -133,6 +135,7 @@ class Bigdict:
             self.info,
             self.read_only,
             self._keep_files,
+            self._key_pickle_protocol,
             self._lmdb_env_config,
         )
 
@@ -142,13 +145,10 @@ class Bigdict:
             self.info,
             self.read_only,
             self._keep_files,
+            self._key_pickle_protocol,
             self._lmdb_env_config,
         ) = state
         self._storage_version = self.info.get('storage_version', 0)
-        if self._storage_version == 0:
-            self._key_pickle_protocol = 4
-        else:
-            self._key_pickle_protocol = 5
         self._shard_level = self.info.get('shard_level', 0)
         self._dbs = {}
         self._wtxns = {}
@@ -231,7 +231,7 @@ class Bigdict:
             else:
                 raise ValueError(f"shard-level {sl}")
             return str(int(base))
-        return ValueError(f"storage-version {sv}")
+        raise ValueError(f"storage-version {sv}")
 
     def _db(self, shard: str = '0'):
         if self._storage_version == 0:
