@@ -239,7 +239,7 @@ def test_destroy():
 
 
 def test_shard():
-    N = 1000
+    N = 10000
     db = Bigdict.new(shard_level=16)
     data = [str(uuid4()) for _ in range(N)]
     for d in data:

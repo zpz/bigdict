@@ -517,6 +517,15 @@ class Bigdict:
         Perform a "copy with compaction" on the dataset.
         If successful, the older data files will be replaced by new ones.
         If unsuccessful, the first failing shard will be left unchanged, and the exception is raised.
+
+        This could reduce file size considerably if
+
+            - the dataset is huge
+            - you have conducted a lot of writing since the last call to ``compact``
+
+        This is an expensive operation. Don't do this often. You may want to do this
+        at the end of a long writing session, and just before you are about to transfer
+        the dataset files to another storage media.
         '''
         self.flush()
         size_old = 0  # bytes
