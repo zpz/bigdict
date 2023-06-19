@@ -25,6 +25,7 @@ class Bigdict:
     but it is likely buggy and limited in other usage patterns.
     The code will evolve as the need arises.
     '''
+
     @classmethod
     def new(
         cls,
