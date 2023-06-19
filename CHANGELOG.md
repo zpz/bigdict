@@ -1,8 +1,10 @@
 # Changelog
 
-## [0.2.7] - in progress
+## [0.2.7] - 2023-06-18
 
 - New method ``compact``.
+- Revised parameter handling regarding ``map_size``.
+- Removed parameter ``read_only`` to ``__init__``.
 
 
 ## [0.2.6] - 2023-05-24
