@@ -15,6 +15,16 @@ UNSET = object()
 
 
 class Bigdict:
+    '''
+    In the target use cases, writing and reading are well separated.
+    Usually one creates a database and writes data into it.
+    Once that's done, it's no longer appended or revised; it's just
+    used for reading.
+
+    This package does not object other usage patterns,
+    but it is likely buggy and limited in other usage patterns.
+    The code will evolve as the need arises.
+    '''
     @classmethod
     def new(
         cls,
@@ -60,7 +70,7 @@ class Bigdict:
         os.makedirs(path)
 
         json.dump(info, open(os.path.join(path, "info.json"), "w"))
-        z = cls(path, read_only=False, **kwargs)
+        z = cls(path, **kwargs)
         z._keep_files = keep_files
         return z
 
@@ -68,15 +78,28 @@ class Bigdict:
         self,
         path: str,
         *,
-        read_only: bool = False,
-        lmdb_env_config: dict = None,
+        map_size_mb: int = 64,
     ):
         '''
         Parameters
         ----------
-        lmdb_env_config
-            Additional named arguments to `lmdb.Environment <https://lmdb.readthedocs.io/en/release/#lmdb.Environment>`_
-            for experimentations.
+        map_size
+            Max size of the database file for one shard.
+
+            On Windows and possibly Mac, the database file (e.g., in `self.path / 'db' / '0' )
+            size is set to be equal to ``map_size`` upfront,
+            hence you should not set an unnecessarily large ``map_size``.
+            On Linux, the database file size grows as needed by the actual data, hence setting a generously
+            large ``map_size`` is probably harmless.
+
+            https://groups.google.com/g/caffe-users/c/0RKsTTYRGpQ?pli=1
+            https://openldap.org/lists/openldap-technical/201511/msg00101.html
+            https://openldap.org/lists/openldap-technical/201511/msg00107.html
+
+            Experiments showed that ``map_size`` is not an intrinsic attribute of the database files.
+            (I did not read about this in documentation, nor do I understand how memory-mapping works.)
+            You are free to choose a ``map_size`` value unrelated to the value used when creating
+            the database files, as long as the value is large enough for your application.
         '''
         self.path = os.path.abspath(path)
 
@@ -87,9 +110,6 @@ class Bigdict:
             warnings.warn(
                 "Support for RocksDB storage is deprecated. Please migrate this old dataset to the new format."
             )
-            if not read_only:
-                warnings.warn("older data with RocksDB backend is read-only")
-                read_only = True
             self._key_pickle_protocol = 4
         else:
             self._key_pickle_protocol = self.info.get('key_pickle_protocol', 5)
@@ -98,26 +118,9 @@ class Bigdict:
         self._shard_level = self.info.get('shard_level', 0)
         # DO NOT EVER manually modify ``self._storage_version`` and ``self._shard_level``.
 
-        self.read_only = read_only
         self._keep_files = True
 
-        self._lmdb_env_config = {
-            'subdir': True,
-            'readahead': False,
-            'map_size': 67108864,  # 64 MB; 1073741824 is 2**30, or 1GB
-            **(lmdb_env_config or {}),
-        }
-
-        # On Windows and possibly Mac, the database file (in `self.path / 'db' / '0' )
-        # size is set to to equal to ``map_size`` upfront,
-        # hence you should not set an unnecessarily large ``map_size``.
-        # On Linux, the database file size grows as needed by the actual data, hence setting a generously
-        # large ``map_size`` is not too bad.
-        #   https://groups.google.com/g/caffe-users/c/0RKsTTYRGpQ?pli=1
-        #   https://openldap.org/lists/openldap-technical/201511/msg00101.html
-        #   https://openldap.org/lists/openldap-technical/201511/msg00107.html
-
-        # Try to avoid using this package on Windows!
+        self._map_size = map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
 
         self._dbs = {}  # environments
         self._wtxns = {}  # write transactions
@@ -133,20 +136,18 @@ class Bigdict:
         return (
             self.path,
             self.info,
-            self.read_only,
             self._keep_files,
             self._key_pickle_protocol,
-            self._lmdb_env_config,
+            self._map_size,
         )
 
     def __setstate__(self, state):
         (
             self.path,
             self.info,
-            self.read_only,
             self._keep_files,
             self._key_pickle_protocol,
-            self._lmdb_env_config,
+            self._map_size,
         ) = state
         self._storage_version = self.info.get('storage_version', 0)
         self._shard_level = self.info.get('shard_level', 0)
@@ -155,8 +156,6 @@ class Bigdict:
         self._rtxns = {}
 
     def __del__(self):
-        if self.read_only:
-            return
         if self._keep_files:
             self.flush()
         else:
@@ -210,9 +209,12 @@ class Bigdict:
         raise ValueError(f"storage-version {sv}")
 
     def _env(self, shard: str, *, readonly=None, **config):
-        conf = {**self._lmdb_env_config, **config}
-        if readonly is None:
-            readonly = self.read_only
+        conf = {
+            'subdir': True,
+            'readahead': False,
+            'map_size': self._map_size,
+            **config,
+        }
         if readonly:
             db = lmdb.Environment(
                 os.path.join(self.path, 'db', shard),
@@ -247,7 +249,7 @@ class Bigdict:
                 self._dbs['0'] = rocksdb.DB(  # pylint: disable=no-member
                     os.path.join(self.path, "db"),
                     rocks_opts(**self.info["db_opts"], create_if_missing=False),
-                    read_only=self.read_only,
+                    read_only=True,
                 )
             return self._dbs['0']
 
@@ -352,7 +354,7 @@ class Bigdict:
         return pickle.loads(v)
 
     def __setitem__(self, key, value):
-        assert not self.read_only
+        # assert not self.read_only
         key = self.encode_key(key)
         shard = self._shard(key)
         value = self.encode_value(value)
@@ -372,7 +374,7 @@ class Bigdict:
         return self.decode_value(v)
 
     def __delitem__(self, key):
-        assert not self.read_only
+        # assert not self.read_only
         k = self.encode_key(key)
         shard = self._shard(k)
         z = self._write_txn(shard).delete(k)
@@ -487,7 +489,7 @@ class Bigdict:
         Do not call this after every write; instead, call this after a write "session",
         before you'done writing or you need to read.
         '''
-        assert not self.read_only
+        # assert not self.read_only
         self.commit()
         json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
 
@@ -495,7 +497,7 @@ class Bigdict:
         '''
         After ``destroy``, disk data is erased and the object is no longer usable.
         '''
-        assert not self.read_only
+        # assert not self.read_only
         self._close()
         shutil.rmtree(self.path, ignore_errors=True)
         try:

@@ -61,7 +61,10 @@ def test_bigdict():
     bd.flush()
     assert 'a' not in bd
 
-    bd2 = Bigdict(bd.path, read_only=True)
+    bd2 = Bigdict(bd.path, map_size_mb=32)
+    # apparently `map_size` is not an attribute of the database file---you
+    # can choose another `map_size` when reading.
+
     assert bd2['b'] == 4
     assert bd2[9] == [1, 2, 'a']
     assert bd2[('a', 3)] == {'a': 3, 'b': 4}
@@ -134,7 +137,6 @@ def test_compat():
     print(list(data.keys()))
     print(list(data.values()))
     print(list(data.items()))
-    assert data.read_only
     assert data._storage_version == 0
     assert len(data) == 5
     assert data[9] == [1, 2, 'a']
@@ -262,3 +264,11 @@ def test_shard():
 
     assert sorted(data) == sorted(db)  # calls `db.keys()`
     assert sorted(data) == sorted(db.values())
+
+    db2 = Bigdict(db.path, map_size_mb=10)
+    assert sorted(data) == sorted(db2)  # calls `db.keys()`
+    assert sorted(data) == sorted(db2.values())
+
+    db3 = Bigdict(db.path, map_size_mb=100)
+    assert sorted(data) == sorted(db3)  # calls `db.keys()`
+    assert sorted(data) == sorted(db3.values())
