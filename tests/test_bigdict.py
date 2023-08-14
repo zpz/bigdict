@@ -4,8 +4,8 @@ import pickle
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
-from uuid import uuid4
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from bigdict import Bigdict

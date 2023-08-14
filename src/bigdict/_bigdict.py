@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import uuid
 import warnings
-from collections.abc import MutableMapping, Iterator
+from collections.abc import Iterator, MutableMapping
 from typing import Generic, TypeVar
 
 import lmdb
