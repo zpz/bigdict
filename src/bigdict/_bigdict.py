@@ -7,7 +7,6 @@ import pickle
 import shutil
 import tempfile
 import uuid
-import warnings
 from collections.abc import Iterator, MutableMapping
 from typing import Generic, TypeVar
 
@@ -113,7 +112,8 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
 
         self._storage_version = self.info.get('storage_version', 0)
         if self._storage_version == 0:
-            raise RuntimeError("Support for RocksDB storage is removed in version 0.2.8. Please use Bigdict <= 0.2.7 to migrate this old dataset to the new format."
+            raise RuntimeError(
+                "Support for RocksDB storage is removed in version 0.2.8. Please use Bigdict <= 0.2.7 to migrate this old dataset to the new format."
             )
             # This turned from warning to error in version 0.2.8 because installing rocksdb had issues.
 

@@ -1,5 +1,4 @@
 import multiprocessing
-import os
 import pickle
 import queue
 from concurrent.futures import ThreadPoolExecutor
