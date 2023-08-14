@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.8] - 2023-08-13
+
+- Made ``BigDict`` subclass ``MutableMapping`` and ``Generic``; improved type annotations.
+
+
 ## [0.2.7] - 2023-06-18
 
 - New method ``compact``.

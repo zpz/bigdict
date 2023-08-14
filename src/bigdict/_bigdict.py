@@ -8,13 +8,18 @@ import shutil
 import tempfile
 import uuid
 import warnings
+from collections.abc import MutableMapping, Iterator
+from typing import Generic, TypeVar
 
 import lmdb
 
 UNSET = object()
 
+KeyType = TypeVar('KeyType')
+ValType = TypeVar('ValType')
 
-class Bigdict:
+
+class Bigdict(MutableMapping, Generic[KeyType, ValType]):
     '''
     In the target use cases, writing and reading are well separated.
     Usually one creates a database and writes data into it.
@@ -322,7 +327,7 @@ class Bigdict:
             x.abort()
         self._wtxns = {}
 
-    def encode_key(self, k) -> bytes:
+    def encode_key(self, k: KeyType) -> bytes:
         '''
         As a general principle, do not persist pickled custom class objects.
         If ``k`` is not of a "native" Python class like str, dict, etc.,
@@ -338,10 +343,10 @@ class Bigdict:
         # That's why we fix the protocol here.
         return pickle.dumps(k, protocol=self._key_pickle_protocol)
 
-    def decode_key(self, k: bytes):
+    def decode_key(self, k: bytes) -> KeyType:
         return pickle.loads(k)
 
-    def encode_value(self, v) -> bytes:
+    def encode_value(self, v: ValType) -> bytes:
         '''
         As a general principle, do not persist pickled custom class objects.
         If ``v`` is not of a "native" Python class like str, dict, etc.,
@@ -351,17 +356,17 @@ class Bigdict:
         '''
         return pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def decode_value(self, v: bytes):
+    def decode_value(self, v: bytes) -> ValType:
         return pickle.loads(v)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: KeyType, value: ValType):
         # assert not self.read_only
         key = self.encode_key(key)
         shard = self._shard(key)
         value = self.encode_value(value)
         self._write_txn(shard).put(key, value)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: KeyType) -> ValType:
         k = self.encode_key(key)
         if self._storage_version == 0:
             v = self._db().get(k)
@@ -374,7 +379,7 @@ class Bigdict:
             raise KeyError(key)
         return self.decode_value(v)
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: KeyType) -> None:
         # assert not self.read_only
         k = self.encode_key(key)
         shard = self._shard(k)
@@ -382,7 +387,7 @@ class Bigdict:
         if not z:
             raise KeyError(key)
 
-    def pop(self, key, default=UNSET):
+    def pop(self, key: KeyType, default=UNSET) -> ValType:
         k = self.encode_key(key)
         shard = self._shard(k)
         v = self._write_txn(shard).pop(k)
@@ -393,20 +398,20 @@ class Bigdict:
         value = self.decode_value(v)
         return value
 
-    def setdefault(self, key, value):
+    def setdefault(self, key: KeyType, value: ValType) -> ValType:
         try:
             return self[key]
         except KeyError:
             self[key] = value
             return value
 
-    def get(self, key, default=None):
+    def get(self, key: KeyType, default=None) -> ValType:
         try:
             return self[key]
         except KeyError:
             return default
 
-    def keys(self):
+    def keys(self) -> Iterator[KeyType]:
         if self._storage_version == 0:
             it = self._db().iterkeys()
             it.seek_to_first()
@@ -418,7 +423,7 @@ class Bigdict:
                 for k in cursor.iternext(keys=True, values=False):
                     yield self.decode_key(k)
 
-    def values(self):
+    def values(self) -> Iterator[ValType]:
         if self._storage_version == 0:
             it = self._db().itervalues()
             it.seek_to_first()
@@ -430,10 +435,10 @@ class Bigdict:
                 for v in cursor.iternext(keys=False, values=True):
                     yield self.decode_value(v)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[KeyType]:
         return self.keys()
 
-    def items(self):
+    def items(self) -> Iterator[tuple[KeyType, ValType]]:
         if self._storage_version == 0:
             it = self._db().iteritems()
             it.seek_to_first()
@@ -445,7 +450,7 @@ class Bigdict:
                 for key, value in cursor.iternext(keys=True, values=True):
                     yield self.decode_key(key), self.decode_value(value)
 
-    def __contains__(self, key):
+    def __contains__(self, key: KeyType) -> bool:
         try:
             _ = self.__getitem__(key)
             return True
@@ -482,7 +487,7 @@ class Bigdict:
                 return True
         return False
 
-    def flush(self):
+    def flush(self) -> None:
         '''
         ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
         Before ``flush`` is called, recent writes may not be available to reading.
@@ -494,7 +499,7 @@ class Bigdict:
         self.commit()
         json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
 
-    def destroy(self):
+    def destroy(self) -> None:
         '''
         After ``destroy``, disk data is erased and the object is no longer usable.
         '''
@@ -507,7 +512,7 @@ class Bigdict:
             pass
         self._keep_files = False  # to prevent issues in subsequent ``__del__``.
 
-    def reload(self):
+    def reload(self) -> None:
         '''
         Call this on a reader object to pick up any recent writes performed
         by another writer object since the creation of the reader object.
@@ -515,7 +520,7 @@ class Bigdict:
         self._close()
         self.info = json.load(open(os.path.join(self.path, "info.json"), "r"))
 
-    def compact(self):
+    def compact(self) -> None:
         '''
         Perform a "copy with compaction" on the dataset.
         If successful, the older data files will be replaced by new ones.

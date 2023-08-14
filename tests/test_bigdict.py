@@ -5,13 +5,14 @@ import queue
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from uuid import uuid4
+from typing import Any
 
 import pytest
 from bigdict import Bigdict
 
 
 def test_bigdict():
-    bd = Bigdict.new()
+    bd: Bigdict[str, int] = Bigdict.new()
     print(bd)
 
     assert list(bd.keys()) == []
@@ -22,7 +23,7 @@ def test_bigdict():
     bd['b'] = 4
     bd.destroy()
 
-    bd = Bigdict.new()
+    bd: Bigdict[Any, Any] = Bigdict.new()
     bd['a'] = 3
     bd[9] = [1, 2, 'a']
     bd[('a', 3)] = {'a': 3, 'b': 4}
