@@ -7,14 +7,18 @@ import pickle
 import shutil
 import tempfile
 import uuid
-import warnings
+from collections.abc import Iterator, MutableMapping
+from typing import Generic, TypeVar
 
 import lmdb
 
 UNSET = object()
 
+KeyType = TypeVar('KeyType')
+ValType = TypeVar('ValType')
 
-class Bigdict:
+
+class Bigdict(MutableMapping, Generic[KeyType, ValType]):
     '''
     In the target use cases, writing and reading are well separated.
     Usually one creates a database and writes data into it.
@@ -108,13 +112,13 @@ class Bigdict:
 
         self._storage_version = self.info.get('storage_version', 0)
         if self._storage_version == 0:
-            warnings.warn(
-                "Support for RocksDB storage is deprecated. Please migrate this old dataset to the new format."
+            raise RuntimeError(
+                "Support for RocksDB storage is removed in version 0.2.8. Please use Bigdict <= 0.2.7 to migrate this old dataset to the new format."
             )
-            self._key_pickle_protocol = 4
-        else:
-            self._key_pickle_protocol = self.info.get('key_pickle_protocol', 5)
-            # This value is in `self.info` starting with 0.2.7.
+            # This turned from warning to error in version 0.2.8 because installing rocksdb had issues.
+
+        self._key_pickle_protocol = self.info.get('key_pickle_protocol', 5)
+        # This value is in `self.info` starting with 0.2.7.
 
         self._shard_level = self.info.get('shard_level', 0)
         # DO NOT EVER manually modify ``self._storage_version`` and ``self._shard_level``.
@@ -150,7 +154,7 @@ class Bigdict:
             self._key_pickle_protocol,
             self._map_size,
         ) = state
-        self._storage_version = self.info.get('storage_version', 0)
+        self._storage_version = self.info['storage_version']
         self._shard_level = self.info.get('shard_level', 0)
         self._dbs = {}
         self._wtxns = {}
@@ -234,26 +238,6 @@ class Bigdict:
         return db
 
     def _db(self, shard: str = '0'):
-        if self._storage_version == 0:
-            if not self._dbs.get('0'):
-                import rocksdb
-
-                def rocks_opts(**kwargs):
-                    opts = rocksdb.Options(**kwargs)
-                    opts.table_factory = rocksdb.BlockBasedTableFactory(
-                        filter_policy=rocksdb.BloomFilterPolicy(10),
-                        block_cache=rocksdb.LRUCache(2 * (1024**3)),
-                        block_cache_compressed=rocksdb.LRUCache(500 * (1024**2)),
-                    )
-                    return opts
-
-                self._dbs['0'] = rocksdb.DB(  # pylint: disable=no-member
-                    os.path.join(self.path, "db"),
-                    rocks_opts(**self.info["db_opts"], create_if_missing=False),
-                    read_only=True,
-                )
-            return self._dbs['0']
-
         db = self._dbs.get(shard, None)
         if db is None:
             db = self._env(shard)
@@ -285,8 +269,6 @@ class Bigdict:
         '''
         Close without commit.
         '''
-        if self._storage_version == 0:
-            return
         for x in self._wtxns.values():
             # x.abort()
             x.__exit__()
@@ -322,7 +304,7 @@ class Bigdict:
             x.abort()
         self._wtxns = {}
 
-    def encode_key(self, k) -> bytes:
+    def encode_key(self, k: KeyType) -> bytes:
         '''
         As a general principle, do not persist pickled custom class objects.
         If ``k`` is not of a "native" Python class like str, dict, etc.,
@@ -338,10 +320,10 @@ class Bigdict:
         # That's why we fix the protocol here.
         return pickle.dumps(k, protocol=self._key_pickle_protocol)
 
-    def decode_key(self, k: bytes):
+    def decode_key(self, k: bytes) -> KeyType:
         return pickle.loads(k)
 
-    def encode_value(self, v) -> bytes:
+    def encode_value(self, v: ValType) -> bytes:
         '''
         As a general principle, do not persist pickled custom class objects.
         If ``v`` is not of a "native" Python class like str, dict, etc.,
@@ -351,30 +333,27 @@ class Bigdict:
         '''
         return pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def decode_value(self, v: bytes):
+    def decode_value(self, v: bytes) -> ValType:
         return pickle.loads(v)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: KeyType, value: ValType):
         # assert not self.read_only
         key = self.encode_key(key)
         shard = self._shard(key)
         value = self.encode_value(value)
         self._write_txn(shard).put(key, value)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: KeyType) -> ValType:
         k = self.encode_key(key)
-        if self._storage_version == 0:
-            v = self._db().get(k)
-        else:
-            shard = self._shard(k)
-            v = self._read_txn(shard).get(k)
+        shard = self._shard(k)
+        v = self._read_txn(shard).get(k)
         # `v` can't be `None` as a valid return from the db,
         # because all values are bytes.
         if v is None:
             raise KeyError(key)
         return self.decode_value(v)
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: KeyType) -> None:
         # assert not self.read_only
         k = self.encode_key(key)
         shard = self._shard(k)
@@ -382,7 +361,7 @@ class Bigdict:
         if not z:
             raise KeyError(key)
 
-    def pop(self, key, default=UNSET):
+    def pop(self, key: KeyType, default=UNSET) -> ValType:
         k = self.encode_key(key)
         shard = self._shard(k)
         v = self._write_txn(shard).pop(k)
@@ -393,59 +372,41 @@ class Bigdict:
         value = self.decode_value(v)
         return value
 
-    def setdefault(self, key, value):
+    def setdefault(self, key: KeyType, value: ValType) -> ValType:
         try:
             return self[key]
         except KeyError:
             self[key] = value
             return value
 
-    def get(self, key, default=None):
+    def get(self, key: KeyType, default=None) -> ValType:
         try:
             return self[key]
         except KeyError:
             return default
 
-    def keys(self):
-        if self._storage_version == 0:
-            it = self._db().iterkeys()
-            it.seek_to_first()
-            for key in it:
-                yield self.decode_key(key)
-        else:
-            for shard in self._shards():
-                cursor = self._read_txn(shard).cursor()
-                for k in cursor.iternext(keys=True, values=False):
-                    yield self.decode_key(k)
+    def keys(self) -> Iterator[KeyType]:
+        for shard in self._shards():
+            cursor = self._read_txn(shard).cursor()
+            for k in cursor.iternext(keys=True, values=False):
+                yield self.decode_key(k)
 
-    def values(self):
-        if self._storage_version == 0:
-            it = self._db().itervalues()
-            it.seek_to_first()
-            for value in it:
-                yield self.decode_value(value)
-        else:
-            for shard in self._shards():
-                cursor = self._read_txn(shard).cursor()
-                for v in cursor.iternext(keys=False, values=True):
-                    yield self.decode_value(v)
+    def values(self) -> Iterator[ValType]:
+        for shard in self._shards():
+            cursor = self._read_txn(shard).cursor()
+            for v in cursor.iternext(keys=False, values=True):
+                yield self.decode_value(v)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[KeyType]:
         return self.keys()
 
-    def items(self):
-        if self._storage_version == 0:
-            it = self._db().iteritems()
-            it.seek_to_first()
-            for key, value in it:
+    def items(self) -> Iterator[tuple[KeyType, ValType]]:
+        for shard in self._shards():
+            cursor = self._read_txn(shard).cursor()
+            for key, value in cursor.iternext(keys=True, values=True):
                 yield self.decode_key(key), self.decode_value(value)
-        else:
-            for shard in self._shards():
-                cursor = self._read_txn(shard).cursor()
-                for key, value in cursor.iternext(keys=True, values=True):
-                    yield self.decode_key(key), self.decode_value(value)
 
-    def __contains__(self, key):
+    def __contains__(self, key: KeyType) -> bool:
         try:
             _ = self.__getitem__(key)
             return True
@@ -453,14 +414,6 @@ class Bigdict:
             return False
 
     def __len__(self) -> int:
-        if self._storage_version == 0:
-            count = 0
-            it = self._db().iterkeys()
-            it.seek_to_first()
-            for _ in it:
-                count += 1
-            return count
-
         n = 0
         for shard in self._shards():
             stat = self._db(shard).stat()
@@ -468,13 +421,6 @@ class Bigdict:
         return n
 
     def __bool__(self) -> bool:
-        if self._storage_version == 0:
-            it = self._db().iterkeys()
-            it.seek_to_first()
-            for _ in it:
-                return True
-            return False
-
         for shard in self._shards():
             stat = self._db(shard).stat()
             n = stat['entries']
@@ -482,7 +428,7 @@ class Bigdict:
                 return True
         return False
 
-    def flush(self):
+    def flush(self) -> None:
         '''
         ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
         Before ``flush`` is called, recent writes may not be available to reading.
@@ -494,7 +440,7 @@ class Bigdict:
         self.commit()
         json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
 
-    def destroy(self):
+    def destroy(self) -> None:
         '''
         After ``destroy``, disk data is erased and the object is no longer usable.
         '''
@@ -507,7 +453,7 @@ class Bigdict:
             pass
         self._keep_files = False  # to prevent issues in subsequent ``__del__``.
 
-    def reload(self):
+    def reload(self) -> None:
         '''
         Call this on a reader object to pick up any recent writes performed
         by another writer object since the creation of the reader object.
@@ -515,7 +461,7 @@ class Bigdict:
         self._close()
         self.info = json.load(open(os.path.join(self.path, "info.json"), "r"))
 
-    def compact(self):
+    def compact(self) -> None:
         '''
         Perform a "copy with compaction" on the dataset.
         If successful, the older data files will be replaced by new ones.

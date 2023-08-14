@@ -1,9 +1,9 @@
 import multiprocessing
-import os
 import pickle
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -11,7 +11,7 @@ from bigdict import Bigdict
 
 
 def test_bigdict():
-    bd = Bigdict.new()
+    bd: Bigdict[str, int] = Bigdict.new()
     print(bd)
 
     assert list(bd.keys()) == []
@@ -22,7 +22,7 @@ def test_bigdict():
     bd['b'] = 4
     bd.destroy()
 
-    bd = Bigdict.new()
+    bd: Bigdict[Any, Any] = Bigdict.new()
     bd['a'] = 3
     bd[9] = [1, 2, 'a']
     bd[('a', 3)] = {'a': 3, 'b': 4}
@@ -98,7 +98,9 @@ def test_bigdict():
         assert bd2['b'] == 4
 
     assert len(bd2) == 3
-    bd.destroy()
+
+    bd2.destroy()
+    # Prevent its saving while everything has been deleted by `db.__del__()`.
 
 
 def test_rollback():
@@ -128,22 +130,6 @@ def test_rollback():
     assert 'c' in db
     db.rollback()
     assert 'd' in db
-
-
-def test_compat():
-    # Read an older dataset persisted by the RocksDB backend.
-    p = os.path.join(os.path.dirname(__file__), 'data010')
-    data = Bigdict(p)
-    print(list(data.keys()))
-    print(list(data.values()))
-    print(list(data.items()))
-    assert data._storage_version == 0
-    assert len(data) == 5
-    assert data[9] == [1, 2, 'a']
-    assert data['a'] == 3
-    assert data['b'] == 4
-    assert data['uid'] == 'abcde'
-    assert data[('a', 3)] == {'a': 3, 'b': 4}
 
 
 def test_pickle():
@@ -272,3 +258,7 @@ def test_shard():
     db3 = Bigdict(db.path, map_size_mb=100)
     assert sorted(data) == sorted(db3)  # calls `db.keys()`
     assert sorted(data) == sorted(db3.values())
+
+    db2.destroy()
+    db3.destroy()
+    # Prevent their saving while `db.__del__()` has already deleted everything.
