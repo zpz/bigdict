@@ -113,13 +113,12 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
 
         self._storage_version = self.info.get('storage_version', 0)
         if self._storage_version == 0:
-            warnings.warn(
-                "Support for RocksDB storage is deprecated. Please migrate this old dataset to the new format."
+            raise RuntimeError("Support for RocksDB storage is removed in version 0.2.8. Please use Bigdict <= 0.2.7 to migrate this old dataset to the new format."
             )
-            self._key_pickle_protocol = 4
-        else:
-            self._key_pickle_protocol = self.info.get('key_pickle_protocol', 5)
-            # This value is in `self.info` starting with 0.2.7.
+            # This turned from warning to error in version 0.2.8 because installing rocksdb had issues.
+
+        self._key_pickle_protocol = self.info.get('key_pickle_protocol', 5)
+        # This value is in `self.info` starting with 0.2.7.
 
         self._shard_level = self.info.get('shard_level', 0)
         # DO NOT EVER manually modify ``self._storage_version`` and ``self._shard_level``.
@@ -155,7 +154,7 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
             self._key_pickle_protocol,
             self._map_size,
         ) = state
-        self._storage_version = self.info.get('storage_version', 0)
+        self._storage_version = self.info['storage_version']
         self._shard_level = self.info.get('shard_level', 0)
         self._dbs = {}
         self._wtxns = {}
@@ -239,26 +238,6 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
         return db
 
     def _db(self, shard: str = '0'):
-        if self._storage_version == 0:
-            if not self._dbs.get('0'):
-                import rocksdb
-
-                def rocks_opts(**kwargs):
-                    opts = rocksdb.Options(**kwargs)
-                    opts.table_factory = rocksdb.BlockBasedTableFactory(
-                        filter_policy=rocksdb.BloomFilterPolicy(10),
-                        block_cache=rocksdb.LRUCache(2 * (1024**3)),
-                        block_cache_compressed=rocksdb.LRUCache(500 * (1024**2)),
-                    )
-                    return opts
-
-                self._dbs['0'] = rocksdb.DB(  # pylint: disable=no-member
-                    os.path.join(self.path, "db"),
-                    rocks_opts(**self.info["db_opts"], create_if_missing=False),
-                    read_only=True,
-                )
-            return self._dbs['0']
-
         db = self._dbs.get(shard, None)
         if db is None:
             db = self._env(shard)
@@ -290,8 +269,6 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
         '''
         Close without commit.
         '''
-        if self._storage_version == 0:
-            return
         for x in self._wtxns.values():
             # x.abort()
             x.__exit__()
@@ -368,11 +345,8 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
 
     def __getitem__(self, key: KeyType) -> ValType:
         k = self.encode_key(key)
-        if self._storage_version == 0:
-            v = self._db().get(k)
-        else:
-            shard = self._shard(k)
-            v = self._read_txn(shard).get(k)
+        shard = self._shard(k)
+        v = self._read_txn(shard).get(k)
         # `v` can't be `None` as a valid return from the db,
         # because all values are bytes.
         if v is None:
@@ -412,43 +386,25 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
             return default
 
     def keys(self) -> Iterator[KeyType]:
-        if self._storage_version == 0:
-            it = self._db().iterkeys()
-            it.seek_to_first()
-            for key in it:
-                yield self.decode_key(key)
-        else:
-            for shard in self._shards():
-                cursor = self._read_txn(shard).cursor()
-                for k in cursor.iternext(keys=True, values=False):
-                    yield self.decode_key(k)
+        for shard in self._shards():
+            cursor = self._read_txn(shard).cursor()
+            for k in cursor.iternext(keys=True, values=False):
+                yield self.decode_key(k)
 
     def values(self) -> Iterator[ValType]:
-        if self._storage_version == 0:
-            it = self._db().itervalues()
-            it.seek_to_first()
-            for value in it:
-                yield self.decode_value(value)
-        else:
-            for shard in self._shards():
-                cursor = self._read_txn(shard).cursor()
-                for v in cursor.iternext(keys=False, values=True):
-                    yield self.decode_value(v)
+        for shard in self._shards():
+            cursor = self._read_txn(shard).cursor()
+            for v in cursor.iternext(keys=False, values=True):
+                yield self.decode_value(v)
 
     def __iter__(self) -> Iterator[KeyType]:
         return self.keys()
 
     def items(self) -> Iterator[tuple[KeyType, ValType]]:
-        if self._storage_version == 0:
-            it = self._db().iteritems()
-            it.seek_to_first()
-            for key, value in it:
+        for shard in self._shards():
+            cursor = self._read_txn(shard).cursor()
+            for key, value in cursor.iternext(keys=True, values=True):
                 yield self.decode_key(key), self.decode_value(value)
-        else:
-            for shard in self._shards():
-                cursor = self._read_txn(shard).cursor()
-                for key, value in cursor.iternext(keys=True, values=True):
-                    yield self.decode_key(key), self.decode_value(value)
 
     def __contains__(self, key: KeyType) -> bool:
         try:
@@ -458,14 +414,6 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
             return False
 
     def __len__(self) -> int:
-        if self._storage_version == 0:
-            count = 0
-            it = self._db().iterkeys()
-            it.seek_to_first()
-            for _ in it:
-                count += 1
-            return count
-
         n = 0
         for shard in self._shards():
             stat = self._db(shard).stat()
@@ -473,13 +421,6 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
         return n
 
     def __bool__(self) -> bool:
-        if self._storage_version == 0:
-            it = self._db().iterkeys()
-            it.seek_to_first()
-            for _ in it:
-                return True
-            return False
-
         for shard in self._shards():
             stat = self._db(shard).stat()
             n = stat['entries']

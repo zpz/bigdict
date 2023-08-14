@@ -27,10 +27,6 @@ Source = "https://github.com/zpz/bigdict"
 
 
 [project.optional-dependencies]
-rocksdb = [
-    # "lbry-rocksdb",
-    "rocksdb",
-]
 doc = [
     "sphinx",
     "numpydoc",
