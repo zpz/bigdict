@@ -1,5 +1,13 @@
 # Changelog
 
+
+## [0.2.9] - 2024-02-17
+
+- Changed Python requirement to 3.10.
+- Changed KeyType to `str`; changed (or fixed) methods `encode_key`, `decode_key`, and `_shard`.
+- Bumped "storage_version" to 2.
+
+
 ## [0.2.8] - 2023-08-13
 
 - Made ``BigDict`` subclass ``MutableMapping`` and ``Generic``; improved type annotations.
