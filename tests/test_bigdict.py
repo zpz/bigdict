@@ -3,7 +3,6 @@ import pickle
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
-from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -11,7 +10,7 @@ from bigdict import Bigdict
 
 
 def test_bigdict():
-    bd: Bigdict[str, int] = Bigdict.new()
+    bd: Bigdict[int] = Bigdict.new()
     print(bd)
 
     assert list(bd.keys()) == []
@@ -22,17 +21,17 @@ def test_bigdict():
     bd['b'] = 4
     bd.destroy()
 
-    bd: Bigdict[Any, Any] = Bigdict.new()
+    bd: Bigdict = Bigdict.new()
     bd['a'] = 3
-    bd[9] = [1, 2, 'a']
-    bd[('a', 3)] = {'a': 3, 'b': 4}
+    bd['9'] = [1, 2, 'a']
+    bd['b'] = {'a': 3, 'b': 4}
     uid = str(uuid4())
     bd['uid'] = uid
 
     assert (
         bd.setdefault('a', 4) == 4
     )  # the un-commited 'a' is invisible and hence overwritten
-    assert bd.setdefault('b', 4) == 4
+    assert bd.setdefault('c', 4) == 4
 
     with pytest.raises(KeyError):
         # Not available before flush:
@@ -44,7 +43,7 @@ def test_bigdict():
     bd.flush()
     assert bd['a'] == 4
     assert bd.setdefault('a', 5) == 4
-    assert bd['b'] == 4
+    assert bd['c'] == 4
     assert len(bd) == 5
 
     bd['a'] = 'a'
@@ -65,12 +64,12 @@ def test_bigdict():
     # apparently `map_size` is not an attribute of the database file---you
     # can choose another `map_size` when reading.
 
-    assert bd2['b'] == 4
-    assert bd2[9] == [1, 2, 'a']
-    assert bd2[('a', 3)] == {'a': 3, 'b': 4}
+    assert bd2['c'] == 4
+    assert bd2['9'] == [1, 2, 'a']
+    assert bd2['b'] == {'a': 3, 'b': 4}
     assert bd2['uid'] == uid
 
-    del bd['b']
+    del bd['c']
     bd.flush()
 
     with pytest.raises(KeyError):
@@ -79,23 +78,23 @@ def test_bigdict():
     with pytest.raises(KeyError):
         bd.pop('99')
 
-    assert 'b' not in bd
+    assert 'c' not in bd
     assert len(bd) == 3
 
     assert sorted(bd.keys(), key=lambda k: bd.encode_key(k)) == sorted(
-        [9, ('a', 3), 'uid'], key=lambda k: bd.encode_key(k)
+        ['9', 'b', 'uid'], key=lambda k: bd.encode_key(k)
     )
 
     # deletion is not reflected in the other reader:
-    assert bd2['b'] == 4
-    assert 'b' in bd2
+    assert bd2['c'] == 4
+    assert 'c' in bd2
     # but length is somehow queries on demand:
     assert len(bd2) == 3
 
     bd2.reload()
-    assert 'b' not in bd2
+    assert 'c' not in bd2
     with pytest.raises(KeyError):
-        assert bd2['b'] == 4
+        assert bd2['c'] == 4
 
     assert len(bd2) == 3
 
@@ -134,15 +133,15 @@ def test_rollback():
 
 def test_pickle():
     data = Bigdict.new()
-    data[1] = 3
-    data[2] = 'b'
+    data['1'] = 3
+    data['2'] = 'b'
     data.flush()
 
     dd = pickle.dumps(data)
     data2 = pickle.loads(dd)
     assert len(data2) == 2
-    assert data2[1] == 3
-    assert data2[2] == 'b'
+    assert data2['1'] == 3
+    assert data2['2'] == 'b'
 
 
 def mp_worker(d, q):
@@ -184,18 +183,18 @@ def test_mp():
 
 def th_worker(data, q):
     assert len(data) == 2
-    data[3] = 'c'
+    data['3'] = 'c'
     q.put(1)
     sleep(0.2)
     assert q.get() == 1
-    assert data[4] == 'd'
+    assert data['4'] == 'd'
     assert len(data) == 4
 
 
 def test_thread():
     data = Bigdict.new()
-    data[1] = 'a'
-    data[2] = 'b'
+    data['1'] = 'a'
+    data['2'] = 'b'
     data.flush()
 
     # Main thread and the child thread share write/read transactions.
@@ -206,12 +205,12 @@ def test_thread():
         task = pool.submit(th_worker, data, q)
         sleep(0.1)
         assert q.get() == 1
-        assert 3 not in data
-        data[4] = 'd'
-        assert 4 not in data
+        assert '3' not in data
+        data['4'] = 'd'
+        assert '4' not in data
         data.flush()
-        assert data[3] == 'c'
-        assert data[4] == 'd'
+        assert data['3'] == 'c'
+        assert data['4'] == 'd'
         q.put(1)
         sleep(0.1)
 
@@ -220,8 +219,8 @@ def test_thread():
 
 def test_destroy():
     data = Bigdict.new(keep_files=True)
-    data[1] = 'a'
-    data[2] = 'b'
+    data['1'] = 'a'
+    data['2'] = 'b'
     data.flush()
     data.destroy()
 

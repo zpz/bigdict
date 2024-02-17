@@ -9,25 +9,24 @@ import tempfile
 import uuid
 from collections.abc import Iterator, MutableMapping
 from typing import Generic, TypeVar
+from hashlib import blake2b
 
 import lmdb
 
 UNSET = object()
 
-KeyType = TypeVar('KeyType')
+KeyType = str
 ValType = TypeVar('ValType')
 
 
-class Bigdict(MutableMapping, Generic[KeyType, ValType]):
+class Bigdict(MutableMapping, Generic[ValType]):
     '''
     In the target use cases, writing and reading are well separated.
     Usually one creates a database and writes data into it.
     Once that's done, it's no longer appended or revised; it's just
     used for reading.
 
-    This package does not object other usage patterns,
-    but it is likely buggy and limited in other usage patterns.
-    The code will evolve as the need arises.
+    This package is likely buggy and limited in other usage patterns.
     '''
 
     @classmethod
@@ -54,11 +53,13 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
         '''
         assert shard_level in (0, 1, 8, 16, 32, 64, 128, 256)
         info = {
-            "storage_version": 1,
+            "storage_version": 2,
             # `storage_version = 1` is introduced in release 0.2.0.
             # It was missing before that, and treated as 0.
             # Version 0 used a RocksDB backend;
-            # version 1 uses a LMDB backend.
+            # version 1+ uses a LMDB backend.
+            # `storage_version = 2` is introduced in release 0.2.9 in light of
+            # a bug in version 1.
             "shard_level": shard_level,
             "key_pickle_protocol": 5,  # Added in 0.2.7. Record this to ensure consistency between insert and query times.
         }
@@ -123,6 +124,13 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
         self._shard_level = self.info.get('shard_level', 0)
         # DO NOT EVER manually modify ``self._storage_version`` and ``self._shard_level``.
 
+        if self._storage_version == 1 and self._shard_level > 1:
+            # "storage version 1" has a bug when "shard level > 1" so that persisted datasets
+            # can not be read back in reliably.
+            raise RuntimeError(
+                "Storage version 1 is no longer supported. Please create new datasets to use a newer storage format."
+            )
+
         self._keep_files = True
 
         self._map_size = map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
@@ -186,16 +194,14 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
         return files
 
     def _shard(self, key: bytes) -> str:
-        # When `shard_level` supports >0 values,
-        # this could return other values.
         sv = self._storage_version
         sl = self._shard_level
         if sv < 1 or sl <= 1:
             return '0'
-        if sv == 1:
+        if sv == 2:
             if len(key) == 0:  # TODO: should we allow empty key value?
                 return '0'
-            base = hash(key)  # TODO: is ``hash`` stable across Python versions?
+            base = blake2b(key, digest_size=1).digest()[0]  # 1 byte, used as int
             if sl == 8:
                 base &= 0b111  # keep the right-most 3 bits, 0 ~ 7
             elif sl == 16:
@@ -210,7 +216,7 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
                 pass  # keep all 8 bits, 0 ~ 255
             else:
                 raise ValueError(f"shard-level {sl}")
-            return str(int(base))
+            return str(base)
         raise ValueError(f"storage-version {sv}")
 
     def _env(self, shard: str, *, readonly=None, **config):
@@ -306,22 +312,21 @@ class Bigdict(MutableMapping, Generic[KeyType, ValType]):
 
     def encode_key(self, k: KeyType) -> bytes:
         '''
-        As a general principle, do not persist pickled custom class objects.
-        If ``k`` is not of a "native" Python class like str, dict, etc.,
-        subclass should customize this method to convert ``k`` to a native type
-        before pickling (or convert to bytes in a whole diff way w/o pickling).
-        Correspnoding customization should happen in :meth:`decode_key`.
+        The key should be a str. 
+        
+        If a subclass uses bytes, then it should
+        customize :meth:`encode_key` and :meth:`decode_key` to skip encoding
+        and decoding.
 
-        If ``k`` is str, you may want to override ``encode_key`` and ``decode_key``
-        to use string ``decode``/``encode`` rather than pickling.
+        If a subclass uses neither str nor bytes, then it needs to
+        provide its own stable and portable way to convert the key to bytes
+        in its custom :meth:`encode_key` and :meth:`decode_key`.
         '''
-        # If reading an existing dataset, the key must be pickled by the same protocol
-        # that was used in the original writing, otherwise the key can not be found.
-        # That's why we fix the protocol here.
-        return pickle.dumps(k, protocol=self._key_pickle_protocol)
+        # https://death.andgravity.com/stable-hashing#fnref-1
+        return k.encode('utf-8')
 
     def decode_key(self, k: bytes) -> KeyType:
-        return pickle.loads(k)
+        return k.decode('utf-8')
 
     def encode_value(self, v: ValType) -> bytes:
         '''
