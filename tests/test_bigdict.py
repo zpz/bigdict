@@ -17,84 +17,84 @@ def test_bigdict():
     assert list(bd.values()) == []
     assert list(bd.items()) == []
 
-    bd['a'] = 3
-    bd['b'] = 4
+    bd["a"] = 3
+    bd["b"] = 4
     bd.destroy()
 
     bd: Bigdict = Bigdict.new()
-    bd['a'] = 3
-    bd['9'] = [1, 2, 'a']
-    bd['b'] = {'a': 3, 'b': 4}
+    bd["a"] = 3
+    bd["9"] = [1, 2, "a"]
+    bd["b"] = {"a": 3, "b": 4}
     uid = str(uuid4())
-    bd['uid'] = uid
+    bd["uid"] = uid
 
     assert (
-        bd.setdefault('a', 4) == 4
+        bd.setdefault("a", 4) == 4
     )  # the un-commited 'a' is invisible and hence overwritten
-    assert bd.setdefault('c', 4) == 4
+    assert bd.setdefault("c", 4) == 4
 
     with pytest.raises(KeyError):
         # Not available before flush:
-        assert bd['a'] == 3
+        assert bd["a"] == 3
 
     # Length is not correct before flush:
     assert len(bd) == 0
 
     bd.flush()
-    assert bd['a'] == 4
-    assert bd.setdefault('a', 5) == 4
-    assert bd['c'] == 4
+    assert bd["a"] == 4
+    assert bd.setdefault("a", 5) == 4
+    assert bd["c"] == 4
     assert len(bd) == 5
 
-    bd['a'] = 'a'
+    bd["a"] = "a"
     bd.flush()
-    assert bd['a'] == 'a'
+    assert bd["a"] == "a"
 
     with pytest.raises(KeyError):
-        assert bd['g'] == 8
+        assert bd["g"] == 8
 
-    assert bd.get('g', 999) == 999
+    assert bd.get("g", 999) == 999
 
-    assert bd.pop('a') == 'a'
-    assert bd['a'] == 'a'
+    assert bd.pop("a") == "a"
+    assert bd["a"] == "a"
     bd.flush()
-    assert 'a' not in bd
+    assert "a" not in bd
 
     bd2 = Bigdict(bd.path, map_size_mb=32)
     # apparently `map_size` is not an attribute of the database file---you
     # can choose another `map_size` when reading.
 
-    assert bd2['c'] == 4
-    assert bd2['9'] == [1, 2, 'a']
-    assert bd2['b'] == {'a': 3, 'b': 4}
-    assert bd2['uid'] == uid
+    assert bd2["c"] == 4
+    assert bd2["9"] == [1, 2, "a"]
+    assert bd2["b"] == {"a": 3, "b": 4}
+    assert bd2["uid"] == uid
 
-    del bd['c']
+    del bd["c"]
     bd.flush()
 
     with pytest.raises(KeyError):
-        del bd['99']
+        del bd["99"]
 
     with pytest.raises(KeyError):
-        bd.pop('99')
+        bd.pop("99")
 
-    assert 'c' not in bd
+    assert "c" not in bd
     assert len(bd) == 3
 
     assert sorted(bd.keys(), key=lambda k: bd.encode_key(k)) == sorted(
-        ['9', 'b', 'uid'], key=lambda k: bd.encode_key(k)
+        ["9", "b", "uid"], key=lambda k: bd.encode_key(k)
     )
 
     # deletion is not reflected in the other reader:
-    assert bd2['c'] == 4
-    assert 'c' in bd2
+    assert bd2["c"] == 4
+    assert "c" in bd2
     # but length is somehow queries on demand:
     assert len(bd2) == 3
 
     bd2.reload()
-    assert 'c' not in bd2
+    assert "c" not in bd2
     with pytest.raises(KeyError):
-        assert bd2['c'] == 4
+        assert bd2["c"] == 4
 
     assert len(bd2) == 3
 
@@ -104,75 +104,75 @@ def test_bigdict():
 
 def test_rollback():
     db = Bigdict.new()
-    db['a'] = 3
-    db['b'] = 4
+    db["a"] = 3
+    db["b"] = 4
     db.flush()
 
     try:
-        db['c'] = 9
-        db['d'] = 10
+        db["c"] = 9
+        db["d"] = 10
         raise ValueError(3)
     except Exception:
         db.rollback()
     else:
         db.commit()
 
-    assert 'c' not in db
-    assert 'd' not in db
+    assert "c" not in db
+    assert "d" not in db
     db.commit()
-    assert 'c' not in db
-    assert 'd' not in db
+    assert "c" not in db
+    assert "d" not in db
 
-    db['c'] = 9
-    db['d'] = 10
+    db["c"] = 9
+    db["d"] = 10
     db.commit()
-    assert 'c' in db
+    assert "c" in db
     db.rollback()
-    assert 'd' in db
+    assert "d" in db
 
 
 def test_pickle():
     data = Bigdict.new()
-    data['1'] = 3
-    data['2'] = 'b'
+    data["1"] = 3
+    data["2"] = "b"
     data.flush()
 
     dd = pickle.dumps(data)
     data2 = pickle.loads(dd)
     assert len(data2) == 2
-    assert data2['1'] == 3
-    assert data2['2'] == 'b'
+    assert data2["1"] == 3
+    assert data2["2"] == "b"
 
 
 def mp_worker(d, q):
-    assert d['a'] == 3
-    assert 'b' not in d
+    assert d["a"] == 3
+    assert "b" not in d
     assert len(d) == 1
     q.put(1)
     assert q.get() == 2
 
     # new write is not visible until reload
-    assert 'b' not in d
+    assert "b" not in d
 
     # current length is accurate w/o reload
     assert len(d) == 2
 
     d.reload()
-    assert 'b' in d
+    assert "b" in d
     assert len(d) == 2
 
 
 def test_mp():
     bd = Bigdict.new()
-    bd['a'] = 3
+    bd["a"] = 3
     bd.flush()
 
-    ctx = multiprocessing.get_context('spawn')
+    ctx = multiprocessing.get_context("spawn")
     q = ctx.Queue()
     task = ctx.Process(target=mp_worker, args=(bd, q))
     task.start()
     assert q.get() == 1
-    bd['b'] = 4
+    bd["b"] = 4
     bd.flush()
     sleep(1)
     q.put(2)
@@ -183,18 +183,18 @@ def test_mp():
 
 def th_worker(data, q):
     assert len(data) == 2
-    data['3'] = 'c'
+    data["3"] = "c"
     q.put(1)
     sleep(0.2)
     assert q.get() == 1
-    assert data['4'] == 'd'
+    assert data["4"] == "d"
     assert len(data) == 4
 
 
 def test_thread():
     data = Bigdict.new()
-    data['1'] = 'a'
-    data['2'] = 'b'
+    data["1"] = "a"
+    data["2"] = "b"
     data.flush()
 
     # Main thread and the child thread share write/read transactions.
@@ -205,12 +205,12 @@ def test_thread():
         task = pool.submit(th_worker, data, q)
         sleep(0.1)
         assert q.get() == 1
-        assert '3' not in data
-        data['4'] = 'd'
-        assert '4' not in data
+        assert "3" not in data
+        data["4"] = "d"
+        assert "4" not in data
         data.flush()
-        assert data['3'] == 'c'
-        assert data['4'] == 'd'
+        assert data["3"] == "c"
+        assert data["4"] == "d"
         q.put(1)
         sleep(0.1)
 
@@ -219,8 +219,8 @@ def test_thread():
 
 def test_destroy():
     data = Bigdict.new(keep_files=True)
-    data['1'] = 'a'
-    data['2'] = 'b'
+    data["1"] = "a"
+    data["2"] = "b"
     data.flush()
     data.destroy()
 
