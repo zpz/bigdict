@@ -261,3 +261,34 @@ def test_shard():
     db2.destroy()
     db3.destroy()
     # Prevent their saving while `db.__del__()` has already deleted everything.
+
+
+def test_write_buffer():
+    db = Bigdict.new(write_buffer_size=0)
+    try:
+        db['a'] = 'a'
+        db['b'] = 'b'
+        assert db['a'] == 'a'
+        assert db['b'] == 'b'
+        db['c'] = 'c'
+        assert len(db) == 3
+        db['d'] = 'd'
+        db['e'] = 'e'
+        # auto commit the above 5
+
+        db['f'] = 'f'
+        assert len(db) == 6
+
+        db['b'] = 9
+        assert len(db) == 6
+
+        db['a'] = 3  # stays in buffer
+
+        assert db.pop('a') == 3
+
+        print(db['a'])
+        # with pytest.raises(KeyError):
+        #    z = db['a']
+
+    finally:
+        db.destroy()
