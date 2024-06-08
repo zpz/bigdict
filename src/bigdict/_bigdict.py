@@ -137,11 +137,11 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self._map_size = map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
         self._write_buffer_size = write_buffer_size
 
-        self._dbs = {}        # environments
-        self._wtxns = {}      # write transactions
-        self._wcursors = {}   # write cursors
-        self._rtxns = {}      # read transactions
-        self._wbuffers = {}   # write buffers
+        self._dbs = {}  # environments
+        self._wtxns = {}  # write transactions
+        self._wcursors = {}  # write cursors
+        self._rtxns = {}  # read transactions
+        self._wbuffers = {}  # write buffers
 
     def __repr__(self):
         return f"{self.__class__.__name__}('{self.path}')"
@@ -175,7 +175,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self._wbuffers = {}
 
     def __del__(self):
-        if not getattr(self, '_destroyed', False):
+        if not getattr(self, "_destroyed", False):
             self.flush()
             for x in self._dbs.values():
                 x.close()
@@ -314,7 +314,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
             x.__exit__()
         self._rtxns = {}
 
-
     def commit(self):
         """
         Commit and close all pending transactions.
@@ -418,7 +417,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 if len(found) == len(buf):
                     del self._wbuffers[shard]
                 else:
-                    self._wbuffers[shard] = [v for i, v in enumerate(buf) if i not in found]
+                    self._wbuffers[shard] = [
+                        v for i, v in enumerate(buf) if i not in found
+                    ]
 
         z = self._write_txn(shard).delete(k)
         if not z and not found:
@@ -427,7 +428,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
     def pop(self, key: KeyType, default=UNSET) -> ValType:
         k = self.encode_key(key)
         shard = self._shard(k)
-        
+
         val = UNSET
         buf = self._wbuffers.get(shard)
         if buf:
@@ -437,7 +438,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 if len(found) == len(buf):
                     del self._wbuffers[shard]
                 else:
-                    self._wbuffers[shard] = [v for i, v in enumerate(buf) if i not in found]
+                    self._wbuffers[shard] = [
+                        v for i, v in enumerate(buf) if i not in found
+                    ]
 
         v = self._write_txn(shard).pop(k)
 
@@ -548,7 +551,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self.commit()
         try:
             json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
-        except FileNotFoundError:  # could happen if this db has been "destroyed", possibly by another client
+        except (
+            FileNotFoundError
+        ):  # could happen if this db has been "destroyed", possibly by another client
             pass
 
     def destroy(self) -> None:
@@ -643,4 +648,4 @@ class Bigdict(MutableMapping, Generic[ValType]):
             f"Finished compressing LMDB dataset at '{self.path}' from {size_old:.2f} MB to {size_new:.2f} MB."
         )
 
-        print('self._dbs:', self._dbs)
+        print("self._dbs:", self._dbs)
