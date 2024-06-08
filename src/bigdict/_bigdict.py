@@ -647,5 +647,3 @@ class Bigdict(MutableMapping, Generic[ValType]):
         print(
             f"Finished compressing LMDB dataset at '{self.path}' from {size_old:.2f} MB to {size_new:.2f} MB."
         )
-
-        print("self._dbs:", self._dbs)
