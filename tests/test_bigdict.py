@@ -218,7 +218,7 @@ def test_thread():
 
 
 def test_destroy():
-    data = Bigdict.new(keep_files=True)
+    data = Bigdict.new()
     data["1"] = "a"
     data["2"] = "b"
     data.flush()

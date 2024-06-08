@@ -34,7 +34,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
         cls,
         path: str = None,
         *,
-        keep_files: bool | None = None,
         shard_level: int = 0,
         **kwargs,
     ):
@@ -65,19 +64,13 @@ class Bigdict(MutableMapping, Generic[ValType]):
         }
 
         if path is None:
-            if keep_files is None:
-                keep_files = False
             path = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
-        else:
-            if keep_files is None:
-                keep_files = True
         path = os.path.abspath(path)
         assert not os.path.isdir(path)
         os.makedirs(path)
 
         json.dump(info, open(os.path.join(path, "info.json"), "w"))
         z = cls(path, **kwargs)
-        z._keep_files = keep_files
         return z
 
     def __init__(
@@ -85,27 +78,37 @@ class Bigdict(MutableMapping, Generic[ValType]):
         path: str,
         *,
         map_size_mb: int = 64,
+        write_buffer_size: int = 0,
     ):
         """
         Parameters
         ----------
-        map_size
+        map_size_mb
             Max size of the database file for one shard.
 
             On Windows and possibly Mac, the database file (e.g., in `self.path / 'db' / '0' )
-            size is set to be equal to ``map_size`` upfront,
-            hence you should not set an unnecessarily large ``map_size``.
+            size is set to be equal to ``map_size_mb`` upfront,
+            hence you should not set an unnecessarily large ``map_size_mb``.
             On Linux, the database file size grows as needed by the actual data, hence setting a generously
-            large ``map_size`` is probably harmless.
+            large ``map_size_mb`` is probably harmless.
 
             https://groups.google.com/g/caffe-users/c/0RKsTTYRGpQ?pli=1
             https://openldap.org/lists/openldap-technical/201511/msg00101.html
             https://openldap.org/lists/openldap-technical/201511/msg00107.html
 
-            Experiments showed that ``map_size`` is not an intrinsic attribute of the database files.
+            Experiments showed that ``map_size_mb`` is not an intrinsic attribute of the database files.
             (I did not read about this in documentation, nor do I understand how memory-mapping works.)
-            You are free to choose a ``map_size`` value unrelated to the value used when creating
+            You are free to choose a ``map_size_mb`` value unrelated to the value used when creating
             the database files, as long as the value is large enough for your application.
+
+        write_buffer_size
+            If > 1, calls to `__setitem__` will put the record in a buffer (per shard) until this count is accumulated,
+            at that point the content of the buffer is written to disk. Essentially, while user calls `__setitem__`
+            for individual records, actual writing happens in batch mode.
+
+            To force write partial batches, call `commit`.
+
+            If `write_buffer_size` is 0 or 1, each call to `__setitem__` will write the single record to disk.
         """
         self.path = os.path.abspath(path)
 
@@ -131,13 +134,14 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 "Storage version 1 is no longer supported. Please create new datasets to use a newer storage format."
             )
 
-        self._keep_files = True
-
         self._map_size = map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
+        self._write_buffer_size = write_buffer_size
 
-        self._dbs = {}  # environments
-        self._wtxns = {}  # write transactions
-        self._rtxns = {}  # read transactions
+        self._dbs = {}        # environments
+        self._wtxns = {}      # write transactions
+        self._wcursors = {}   # write cursors
+        self._rtxns = {}      # read transactions
+        self._wbuffers = {}   # write buffers
 
     def __repr__(self):
         return f"{self.__class__.__name__}('{self.path}')"
@@ -149,30 +153,33 @@ class Bigdict(MutableMapping, Generic[ValType]):
         return (
             self.path,
             self.info,
-            self._keep_files,
             self._key_pickle_protocol,
             self._map_size,
+            self._write_buffer_size,
         )
 
     def __setstate__(self, state):
         (
             self.path,
             self.info,
-            self._keep_files,
             self._key_pickle_protocol,
             self._map_size,
+            self._write_buffer_size,
         ) = state
         self._storage_version = self.info["storage_version"]
         self._shard_level = self.info.get("shard_level", 0)
         self._dbs = {}
         self._wtxns = {}
+        self._wcursors = {}
         self._rtxns = {}
+        self._wbuffers = {}
 
     def __del__(self):
-        if self._keep_files:
+        if not getattr(self, '_destroyed', False):
             self.flush()
-        else:
-            self.destroy()
+            for x in self._dbs.values():
+                x.close()
+            self._dbs = {}
 
     def _shards(self) -> list[str]:
         if self._shard_level <= 1:
@@ -239,6 +246,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 os.path.join(self.path, "db", shard),
                 readonly=False,
                 writemap=True,
+                map_async=True,
                 **conf,
             )
         return db
@@ -266,26 +274,46 @@ class Bigdict(MutableMapping, Generic[ValType]):
             self._rtxns[shard] = txn
         return self._rtxns[shard]
 
+    def _write_buffer(self, shard):
+        buf = self._wbuffers.get(shard)
+        if buf:
+            cur = self._wcursors.get(shard)
+            if cur is None:
+                cur = self._write_txn(shard).cursor()
+                self._wcursors[shard] = cur
+            cur.putmulti(buf)
+            del self._wbuffers[shard]
+
     def _commit(self):
+        if self._write_buffer_size > 1:
+            for shard in list(self._write_buffer.keys()):
+                self._write_buffer(shard)
+            for c in self._wcursors.values():
+                c.close()
+            self._wcursors = {}
+
         for x in self._wtxns.values():
             x.commit()
+            # x.__exit__()
         self._wtxns = {}
 
     def _close(self):
         """
         Close without commit.
         """
+        for c in self._wcursors.values():
+            c.close()
+        self._wcursors = {}
         for x in self._wtxns.values():
             # x.abort()
             x.__exit__()
         self._wtxns = {}
+        self._wbuffers = {}
         for x in self._rtxns.values():
             # x.abort()
             x.__exit__()
         self._rtxns = {}
-        for x in self._dbs.values():
-            x.close()
-        self._dbs = {}
+
 
     def commit(self):
         """
@@ -306,6 +334,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         Note: this does not affect changes to ``self.info``.
         """
+        self._wbuffers = {}
+        for c in self._wcursors.values():
+            c.close()
+        self._wcursors = {}
         for x in self._wtxns.values():
             x.abort()
         self._wtxns = {}
@@ -342,16 +374,32 @@ class Bigdict(MutableMapping, Generic[ValType]):
         return pickle.loads(v)
 
     def __setitem__(self, key: KeyType, value: ValType):
-        # assert not self.read_only
         key = self.encode_key(key)
         shard = self._shard(key)
         value = self.encode_value(value)
-        self._write_txn(shard).put(key, value)
+        if self._write_buffer_size <= 1:
+            self._write_txn(shard).put(key, value)
+            return
+
+        buf = self._wbuffers.setdefault(shard, [])
+        buf.append((key, value))
+        if len(buf) == self._write_buffer_size:
+            self._write_buffer(shard)
 
     def __getitem__(self, key: KeyType) -> ValType:
         k = self.encode_key(key)
         shard = self._shard(k)
-        v = self._read_txn(shard).get(k)
+
+        buf = self._wbuffers.get(shard)
+        if buf:
+            for kk, vv in reversed(buf):
+                if kk == k:
+                    return self.decode_value(vv)
+
+        try:
+            v = self._read_txn(shard).get(k)
+        except lmdb.PageNotFoundError:
+            raise KeyError(key)
         # `v` can't be `None` as a valid return from the db,
         # because all values are bytes.
         if v is None:
@@ -359,23 +407,49 @@ class Bigdict(MutableMapping, Generic[ValType]):
         return self.decode_value(v)
 
     def __delitem__(self, key: KeyType) -> None:
-        # assert not self.read_only
         k = self.encode_key(key)
         shard = self._shard(k)
+
+        found = 0
+        buf = self._wbuffers.get(shard)
+        if buf:
+            found = [i for i, (key, _) in enumerate(buf) if key == k]
+            if found:
+                if len(found) == len(buf):
+                    del self._wbuffers[shard]
+                else:
+                    self._wbuffers[shard] = [v for i, v in enumerate(buf) if i not in found]
+
         z = self._write_txn(shard).delete(k)
-        if not z:
+        if not z and not found:
             raise KeyError(key)
 
     def pop(self, key: KeyType, default=UNSET) -> ValType:
         k = self.encode_key(key)
         shard = self._shard(k)
+        
+        val = UNSET
+        buf = self._wbuffers.get(shard)
+        if buf:
+            found = [i for i, (key, _) in enumerate(buf) if key == k]
+            if found:
+                val = buf[found[-1]]
+                if len(found) == len(buf):
+                    del self._wbuffers[shard]
+                else:
+                    self._wbuffers[shard] = [v for i, v in enumerate(buf) if i not in found]
+
         v = self._write_txn(shard).pop(k)
-        if v is None:
-            if default is UNSET:
-                raise KeyError(key)
-            return default
-        value = self.decode_value(v)
-        return value
+
+        if val is not UNSET:
+            return self.decode_value(val)
+
+        if v is not None:
+            return self.decode_value(v)
+
+        if default is UNSET:
+            raise KeyError(key)
+        return default
 
     def setdefault(self, key: KeyType, value: ValType) -> ValType:
         try:
@@ -391,25 +465,47 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return default
 
     def keys(self) -> Iterator[KeyType]:
+        # If `self._write_buffer_size > 1`, then buffers and disk combined could contain duplicate keys,
+        # then the iterator returned will have the duplicate keys as well.
+        decoder = self.decode_key
         for shard in self._shards():
+            buf = self._wbuffers.get(shard)
+            if buf:
+                for k, _ in buf:
+                    yield decoder(k)
+
             cursor = self._read_txn(shard).cursor()
             for k in cursor.iternext(keys=True, values=False):
-                yield self.decode_key(k)
+                yield decoder(k)
 
     def values(self) -> Iterator[ValType]:
+        # Similar to `keys`, if `self._write_buffer_size > 1`, the result may not be ideal.
+        decoder = self.decode_value
         for shard in self._shards():
+            buf = self._wbuffers.get(shard)
+            if buf:
+                for _, v in buf:
+                    yield decoder(v)
+
             cursor = self._read_txn(shard).cursor()
             for v in cursor.iternext(keys=False, values=True):
-                yield self.decode_value(v)
+                yield decoder(v)
 
     def __iter__(self) -> Iterator[KeyType]:
         return self.keys()
 
     def items(self) -> Iterator[tuple[KeyType, ValType]]:
+        decode_key = self.decode_key
+        decode_val = self.decode_value
         for shard in self._shards():
+            buf = self._wbuffers.get(shard)
+            if buf:
+                for k, v in buf:
+                    yield decode_key(k), decode_val(v)
+
             cursor = self._read_txn(shard).cursor()
             for key, value in cursor.iternext(keys=True, values=True):
-                yield self.decode_key(key), self.decode_value(value)
+                yield decode_key(key), decode_val(value)
 
     def __contains__(self, key: KeyType) -> bool:
         try:
@@ -419,14 +515,22 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return False
 
     def __len__(self) -> int:
+        # If `self._write_buffer_size > 1`, this count includes elements in buffers.
+        # However, buffer and the disk combined could contain duplicate keys,
+        # hence the count is not perfectly reliable.
         n = 0
         for shard in self._shards():
+            n += len(self._wbuffers.get(shard, []))
             stat = self._db(shard).stat()
             n += stat["entries"]
         return n
 
     def __bool__(self) -> bool:
+        # Return `True` if the db is not empty.
+        # This counts content in buffers if `self._write_buffer_size > 1`.
         for shard in self._shards():
+            if self._wbuffers.get(shard):
+                return True
             stat = self._db(shard).stat()
             n = stat["entries"]
             if n:
@@ -441,22 +545,26 @@ class Bigdict(MutableMapping, Generic[ValType]):
         Do not call this after every write; instead, call this after a write "session",
         before you'done writing or you need to read.
         """
-        # assert not self.read_only
         self.commit()
-        json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
+        try:
+            json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
+        except FileNotFoundError:  # could happen if this db has been "destroyed", possibly by another client
+            pass
 
     def destroy(self) -> None:
         """
         After ``destroy``, disk data is erased and the object is no longer usable.
         """
-        # assert not self.read_only
         self._close()
+        for x in self._dbs.values():
+            x.close()
+        self._dbs = {}
         shutil.rmtree(self.path, ignore_errors=True)
         try:
             delattr(self, "info")
         except AttributeError:
             pass
-        self._keep_files = False  # to prevent issues in subsequent ``__del__``.
+        self._destroyed = True
 
     def reload(self) -> None:
         """
@@ -481,7 +589,12 @@ class Bigdict(MutableMapping, Generic[ValType]):
         at the end of a long writing session, and just before you are about to transfer
         the dataset files to another storage media.
         """
+        # It is likely that after calling this method, the current object is no longer usable.
+        # This is not carefully considered yet.
         self.flush()
+        for x in self._dbs.values():
+            x.close()
+        self._dbs = {}
         size_old = 0  # bytes
         size_new = 0  # bytes
 
@@ -529,3 +642,5 @@ class Bigdict(MutableMapping, Generic[ValType]):
         print(
             f"Finished compressing LMDB dataset at '{self.path}' from {size_old:.2f} MB to {size_new:.2f} MB."
         )
+
+        print('self._dbs:', self._dbs)

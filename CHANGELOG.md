@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [0.3.0] - in progress
+
+- Do not call `destroy` in `__del__`.
+- Remove parameter `keep_files` to `Bigdict.new`.
+- Add parameter `write_buffer_size` to `__init__`. This triggered changes to most write and read methods.
+
+
 ## [0.2.9] - 2024-02-17
 
 - Changed Python requirement to 3.10.
