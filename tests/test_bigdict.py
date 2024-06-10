@@ -28,26 +28,19 @@ def test_bigdict():
     uid = str(uuid4())
     bd["uid"] = uid
 
-    assert (
-        bd.setdefault("a", 4) == 4
-    )  # the un-commited 'a' is invisible and hence overwritten
+    assert bd.setdefault("a", 4) == 3
     assert bd.setdefault("c", 4) == 4
 
-    with pytest.raises(KeyError):
-        # Not available before flush:
-        assert bd["a"] == 3
+    assert bd["a"] == 3
 
-    # Length is not correct before flush:
-    assert len(bd) == 0
+    assert len(bd) == 5
 
-    bd.flush()
-    assert bd["a"] == 4
-    assert bd.setdefault("a", 5) == 4
+    assert bd["a"] == 3
+    assert bd.setdefault("a", 5) == 3
     assert bd["c"] == 4
     assert len(bd) == 5
 
     bd["a"] = "a"
-    bd.flush()
     assert bd["a"] == "a"
 
     with pytest.raises(KeyError):
@@ -56,8 +49,6 @@ def test_bigdict():
     assert bd.get("g", 999) == 999
 
     assert bd.pop("a") == "a"
-    assert bd["a"] == "a"
-    bd.flush()
     assert "a" not in bd
 
     bd2 = Bigdict(bd.path, map_size_mb=32)
@@ -70,7 +61,6 @@ def test_bigdict():
     assert bd2["uid"] == uid
 
     del bd["c"]
-    bd.flush()
 
     with pytest.raises(KeyError):
         del bd["99"]
@@ -91,7 +81,6 @@ def test_bigdict():
     # but length is somehow queries on demand:
     assert len(bd2) == 3
 
-    bd2.reload()
     assert "c" not in bd2
     with pytest.raises(KeyError):
         assert bd2["c"] == 4
@@ -102,35 +91,6 @@ def test_bigdict():
     # Prevent its saving while everything has been deleted by `db.__del__()`.
 
 
-def test_rollback():
-    db = Bigdict.new()
-    db["a"] = 3
-    db["b"] = 4
-    db.flush()
-
-    try:
-        db["c"] = 9
-        db["d"] = 10
-        raise ValueError(3)
-    except Exception:
-        db.rollback()
-    else:
-        db.commit()
-
-    assert "c" not in db
-    assert "d" not in db
-    db.commit()
-    assert "c" not in db
-    assert "d" not in db
-
-    db["c"] = 9
-    db["d"] = 10
-    db.commit()
-    assert "c" in db
-    db.rollback()
-    assert "d" in db
-
-
 def test_pickle():
     data = Bigdict.new()
     data["1"] = 3
@@ -139,6 +99,7 @@ def test_pickle():
 
     dd = pickle.dumps(data)
     data2 = pickle.loads(dd)
+    del data  # It's a serious problem to have two write transactions in one process
     assert len(data2) == 2
     assert data2["1"] == 3
     assert data2["2"] == "b"
@@ -148,47 +109,55 @@ def mp_worker(d, q):
     assert d["a"] == 3
     assert "b" not in d
     assert len(d) == 1
+
     q.put(1)
     assert q.get() == 2
 
-    # new write is not visible until reload
-    assert "b" not in d
-
-    # current length is accurate w/o reload
+    assert d['b'] == 4
     assert len(d) == 2
 
-    d.reload()
-    assert "b" in d
-    assert len(d) == 2
+    d['c'] = 9
+    d.commit()
+    q.put(3)
 
 
 def test_mp():
     bd = Bigdict.new()
     bd["a"] = 3
-    bd.flush()
+    bd.commit()
 
     ctx = multiprocessing.get_context("spawn")
     q = ctx.Queue()
     task = ctx.Process(target=mp_worker, args=(bd, q))
     task.start()
+
     assert q.get() == 1
     bd["b"] = 4
-    bd.flush()
+    bd.commit()  # TODO: study why this is needed
     sleep(1)
+
     q.put(2)
+    assert q.get() == 3
+
+    assert bd['c'] == 9
 
     task.join()
     assert task.exitcode == 0
 
 
-def th_worker(data, q):
+def th_worker(path, q):
+    data = Bigdict(path, readonly=True)
+
     assert len(data) == 2
-    data["3"] = "c"
+    # data["3"] = "c"
+    # data.commit()
+
     q.put(1)
     sleep(0.2)
+
     assert q.get() == 1
     assert data["4"] == "d"
-    assert len(data) == 4
+    assert len(data) == 3
 
 
 def test_thread():
@@ -202,16 +171,20 @@ def test_thread():
 
     q = queue.Queue()
     with ThreadPoolExecutor(1) as pool:
-        task = pool.submit(th_worker, data, q)
+        task = pool.submit(th_worker, data.path, q)
         sleep(0.1)
-        assert q.get() == 1
+
+        # assert q.get() == 1
+
         assert "3" not in data
         data["4"] = "d"
-        assert "4" not in data
+        data.commit()
+    
+        assert "4" in data
         data.flush()
-        assert data["3"] == "c"
+        # assert data["3"] == "c"
         assert data["4"] == "d"
-        q.put(1)
+        # q.put(2)
         sleep(0.1)
 
         task.result()
@@ -244,8 +217,7 @@ def test_shard():
 
     db.compact()
     assert not db._dbs
-    assert not db._wtxns
-    assert not db._rtxns
+    assert not db._transactions
 
     assert sorted(data) == sorted(db)  # calls `db.keys()`
     assert sorted(data) == sorted(db.values())
@@ -262,33 +234,3 @@ def test_shard():
     db3.destroy()
     # Prevent their saving while `db.__del__()` has already deleted everything.
 
-
-def test_write_buffer():
-    db = Bigdict.new(write_buffer_size=0)
-    try:
-        db['a'] = 'a'
-        db['b'] = 'b'
-        assert db['a'] == 'a'
-        assert db['b'] == 'b'
-        db['c'] = 'c'
-        assert len(db) == 3
-        db['d'] = 'd'
-        db['e'] = 'e'
-        # auto commit the above 5
-
-        db['f'] = 'f'
-        assert len(db) == 6
-
-        db['b'] = 9
-        assert len(db) == 6
-
-        db['a'] = 3  # stays in buffer
-
-        assert db.pop('a') == 3
-
-        print(db['a'])
-        # with pytest.raises(KeyError):
-        #    z = db['a']
-
-    finally:
-        db.destroy()

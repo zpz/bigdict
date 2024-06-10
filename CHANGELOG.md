@@ -3,9 +3,13 @@
 
 ## [0.3.0] - in progress
 
+Significant refactor with simplifications, corrections, and enhancements.
+
+- Do not use separate transactions for reading and writing. Use the same.
+- Added method `update`, which provides batch writing much more efficient than individual `__setitem__`.
 - Do not call `destroy` in `__del__`.
-- Remove parameter `keep_files` to `Bigdict.new`.
-- Add parameter `write_buffer_size` to `__init__`. This triggered changes to most write and read methods.
+- Removed parameter `keep_files` to `Bigdict.new`.
+- Removed parameter `readonly` to `__init__`, default to `True`.
 
 
 ## [0.2.9] - 2024-02-17

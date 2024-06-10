@@ -7,7 +7,8 @@ import pickle
 import shutil
 import tempfile
 import uuid
-from collections.abc import Iterator, MutableMapping
+from collections import defaultdict
+from collections.abc import Iterator, MutableMapping, Iterable, Mapping
 from hashlib import blake2b
 from typing import Generic, TypeVar
 
@@ -23,10 +24,24 @@ class Bigdict(MutableMapping, Generic[ValType]):
     """
     In the target use cases, writing and reading are well separated.
     Usually one creates a database and writes data into it.
-    Once that's done, it's no longer appended or revised; it's just
+    Once that's done, it's no longer appended to or revised; it's just
     used for reading.
 
-    This package is likely buggy and limited in other usage patterns.
+    You may need to use extra caution in other usage patterns.
+
+    If reading and writing are mixed, calling `commit` after writing and before reading
+    should eliminate most issues. There is no need to call `commit` between consecutive writings
+    or consecutive readings, or after reading and before writing.
+    
+    Across multiple threads in one process, there can be multiple readers but at most one writer at any time.
+    If you want recent writing to be visible to readers (in the same or other threads), call `commit` after writing.
+    If multiple threads write, call `commit` after a writing "streak" in one thread, and do not have overlapping
+    writing streaks in threads.
+
+    Follow these same rules in multiprocessing.
+
+    If you write a large number of entries, using `update` with large batches is much more efficient than
+    individual writes via `__setitem__`.
     """
 
     @classmethod
@@ -70,7 +85,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         os.makedirs(path)
 
         json.dump(info, open(os.path.join(path, "info.json"), "w"))
-        z = cls(path, **kwargs)
+        z = cls(path, readonly=False, **kwargs)
         return z
 
     def __init__(
@@ -78,7 +93,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         path: str,
         *,
         map_size_mb: int = 64,
-        write_buffer_size: int = 0,
+        readonly: bool = True,
     ):
         """
         Parameters
@@ -100,15 +115,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
             (I did not read about this in documentation, nor do I understand how memory-mapping works.)
             You are free to choose a ``map_size_mb`` value unrelated to the value used when creating
             the database files, as long as the value is large enough for your application.
-
-        write_buffer_size
-            If > 1, calls to `__setitem__` will put the record in a buffer (per shard) until this count is accumulated,
-            at that point the content of the buffer is written to disk. Essentially, while user calls `__setitem__`
-            for individual records, actual writing happens in batch mode.
-
-            To force write partial batches, call `commit`.
-
-            If `write_buffer_size` is 0 or 1, each call to `__setitem__` will write the single record to disk.
         """
         self.path = os.path.abspath(path)
 
@@ -134,14 +140,18 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 "Storage version 1 is no longer supported. Please create new datasets to use a newer storage format."
             )
 
-        self._map_size = map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
-        self._write_buffer_size = write_buffer_size
+        self._map_size_mb = map_size_mb
+        self._readonly = readonly
+        self._dbs = {}
+        self._transactions = {}
 
-        self._dbs = {}  # environments
-        self._wtxns = {}  # write transactions
-        self._wcursors = {}  # write cursors
-        self._rtxns = {}  # read transactions
-        self._wbuffers = {}  # write buffers
+    @property
+    def readonly(self):
+        return self._readonly
+
+    @property
+    def map_size_mb(self):
+        return self._map_size_mb
 
     def __repr__(self):
         return f"{self.__class__.__name__}('{self.path}')"
@@ -149,47 +159,33 @@ class Bigdict(MutableMapping, Generic[ValType]):
     def __str__(self):
         return self.__repr__()
 
-    def __getstate__(self):
+    @staticmethod
+    def _reduce_rebuild(cls, path, map_size_mb, readonly):
+        return cls(path, map_size_mb=map_size_mb, readonly=readonly)
+
+    def __reduce__(self):
         return (
-            self.path,
-            self.info,
-            self._key_pickle_protocol,
-            self._map_size,
-            self._write_buffer_size,
+            self._reduce_rebuild,
+            (type(self), self.path, self.map_size_mb, self.readonly)
         )
 
-    def __setstate__(self, state):
-        (
-            self.path,
-            self.info,
-            self._key_pickle_protocol,
-            self._map_size,
-            self._write_buffer_size,
-        ) = state
-        self._storage_version = self.info["storage_version"]
-        self._shard_level = self.info.get("shard_level", 0)
-        self._dbs = {}
-        self._wtxns = {}
-        self._wcursors = {}
-        self._rtxns = {}
-        self._wbuffers = {}
-
     def __del__(self):
-        # Although this tries to flush uncommitted changes, this is not totally reliable.
-        # It is recommended to explicitly `commit` or `flush` before you leave
+        # Although this tries to flush unsaved changes, this is not totally reliable.
+        # It is recommended to explicitly `flush` before you leave
         # after you make any writes, including updates to `info`.
         if getattr(self, "info", None) is not None:  # otherwise `destroy` has been called
             try:
                 self.flush()
             except FileNotFoundError as e:
                 if '/info.json' in str(e):
-                    # could not find the 'info' file or folder;
+                    # Could not find the 'info' file or folder;
                     # could happen if this db has been "destroyed" by another client
                     pass
                 else:
                     raise
             except NameError as e:
                 if str(e) == "name 'open' is not defined":
+                    # Could happen during interpreter shutdown.
                     pass
                 else:
                     raise
@@ -199,6 +195,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
             self._dbs = {}
 
     def _shards(self) -> list[str]:
+        # Return existing shards.
+        # The shards permitted by `self._shard_level` may not all be existing (yet).
         if self._shard_level <= 1:
             return ["0"]
 
@@ -244,92 +242,44 @@ class Bigdict(MutableMapping, Generic[ValType]):
         raise ValueError(f"storage-version {sv}")
 
     def _env(self, shard: str, *, readonly=None, **config):
-        conf = {
-            "subdir": True,
-            "readahead": False,
-            "map_size": self._map_size,
-            **config,
-        }
+        map_size = self.map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
         if readonly:
             db = lmdb.Environment(
                 os.path.join(self.path, "db", shard),
                 create=False,
                 readonly=True,
-                **conf,
+                subdir=True,
+                readahead=False,
+                map_size=map_size,
+                **config,
             )
         else:
             os.makedirs(os.path.join(self.path, "db", shard), exist_ok=True)
             db = lmdb.Environment(
                 os.path.join(self.path, "db", shard),
                 readonly=False,
+                subdir=True,
+                readahead=False,
+                map_size=map_size,
                 writemap=True,
-                # map_async=True,
-                **conf,
+                map_async=True,
+                **config,
             )
         return db
 
     def _db(self, shard: str = "0"):
         db = self._dbs.get(shard, None)
         if db is None:
-            db = self._env(shard)
+            db = self._env(shard, readonly=self.readonly)
             self._dbs[shard] = db
         return db
 
-    def _write_txn(self, shard: str = "0"):
-        # TODO: check out the `buffers` parameter to ``lmdb.Transaction``.
-        if shard not in self._wtxns:
-            txn = lmdb.Transaction(self._db(shard), write=True)
-            txn.__enter__()
-            self._wtxns[shard] = txn
-        return self._wtxns[shard]
-
-    def _read_txn(self, shard: str = "0"):
-        # TODO: check out the `buffers` parameter to ``lmdb.Transaction``.
-        if shard not in self._rtxns:
-            txn = lmdb.Transaction(self._db(shard), write=False)
-            txn.__enter__()
-            self._rtxns[shard] = txn
-        return self._rtxns[shard]
-
-    def _write_buffer(self, shard):
-        buf = self._wbuffers.get(shard)
-        if buf:
-            cur = self._wcursors.get(shard)
-            if cur is None:
-                cur = self._write_txn(shard).cursor()
-                self._wcursors[shard] = cur
-            cur.putmulti(buf)
-            del self._wbuffers[shard]
-
-    def _commit(self):
-        if self._write_buffer_size > 1:
-            for shard in list(self._wbuffers.keys()):
-                self._write_buffer(shard)
-            for c in self._wcursors.values():
-                c.close()
-            self._wcursors = {}
-
-        for x in self._wtxns.values():
-            x.commit()
-            # x.__exit__()
-        self._wtxns = {}
-
-    def _close(self):
-        """
-        Close without commit.
-        """
-        for c in self._wcursors.values():
-            c.close()
-        self._wcursors = {}
-        for x in self._wtxns.values():
-            # x.abort()
-            x.__exit__()
-        self._wtxns = {}
-        self._wbuffers = {}
-        for x in self._rtxns.values():
-            # x.abort()
-            x.__exit__()
-        self._rtxns = {}
+    def _transaction(self, shard: str = "0"):
+        if shard not in self._transactions:
+            txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
+            txn.__enter__()  # this does nothing as of `lmdb` version 1.4.1.
+            self._transactions[shard] = txn
+        return self._transactions[shard]
 
     def commit(self):
         """
@@ -341,22 +291,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
         you need to commit writes frequently), you can call ``commit`` instead
         of ``flush``.
         """
-        self._commit()
-        self._close()
-
-    def rollback(self):
-        """
-        Rollback un-committed write transactions.
-
-        Note: this does not affect changes to ``self.info``.
-        """
-        self._wbuffers = {}
-        for c in self._wcursors.values():
-            c.close()
-        self._wcursors = {}
-        for x in self._wtxns.values():
-            x.abort()
-        self._wtxns = {}
+        for x in self._transactions.values():
+            x.commit()
+        self._transactions = {}
 
     def encode_key(self, k: KeyType) -> bytes:
         """
@@ -393,27 +330,14 @@ class Bigdict(MutableMapping, Generic[ValType]):
         key = self.encode_key(key)
         shard = self._shard(key)
         value = self.encode_value(value)
-        if self._write_buffer_size <= 1:
-            self._write_txn(shard).put(key, value)
-            return
-
-        buf = self._wbuffers.setdefault(shard, [])
-        buf.append((key, value))
-        if len(buf) >= self._write_buffer_size:
-            self._write_buffer(shard)
+        self._transaction(shard).put(key, value)
 
     def __getitem__(self, key: KeyType) -> ValType:
         k = self.encode_key(key)
         shard = self._shard(k)
 
-        buf = self._wbuffers.get(shard)
-        if buf:
-            for kk, vv in reversed(buf):
-                if kk == k:
-                    return self.decode_value(vv)
-
         try:
-            v = self._read_txn(shard).get(k)
+            v = self._transaction(shard).get(k)
         except lmdb.PageNotFoundError:
             raise KeyError(key)
         # `v` can't be `None` as a valid return from the db,
@@ -425,56 +349,19 @@ class Bigdict(MutableMapping, Generic[ValType]):
     def __delitem__(self, key: KeyType) -> None:
         k = self.encode_key(key)
         shard = self._shard(k)
-
-        found = 0
-        buf = self._wbuffers.get(shard)
-        if buf:
-            found = [i for i, (key, _) in enumerate(buf) if key == k]
-            if found:
-                if len(found) == len(buf):
-                    del self._wbuffers[shard]
-                else:
-                    self._wbuffers[shard] = [
-                        v for i, v in enumerate(buf) if i not in found
-                    ]
-
-        z = self._write_txn(shard).delete(k)
-        if not z and not found:
+        z = self._transaction(shard).delete(k)
+        if not z:
             raise KeyError(key)
 
     def pop(self, key: KeyType, default=UNSET) -> ValType:
         k = self.encode_key(key)
         shard = self._shard(k)
-
-        val = UNSET
-        buf = self._wbuffers.get(shard)
-        if buf:
-            found = [i for i, (key, _) in enumerate(buf) if key == k]
-            if found:
-                val = buf[found[-1]][1]
-                if len(found) == len(buf):
-                    del self._wbuffers[shard]
-                else:
-                    self._wbuffers[shard] = [
-                        v for i, v in enumerate(buf) if i not in found
-                    ]
-
-        # print()
-        v = self._write_txn(shard).pop(k)
-        print('popped:', k, v)
-        # print()
-        # self._write_txn(shard).commit()
-        # del self._wtxns[shard]
-
-        if val is not UNSET:
-            return self.decode_value(val)
-
-        if v is not None:
-            return self.decode_value(v)
-
-        if default is UNSET:
-            raise KeyError(key)
-        return default
+        v = self._transaction(shard).pop(k)
+        if v is None:
+            if default is UNSET:
+                raise KeyError(key)
+            return default
+        return self.decode_value(v)
 
     def setdefault(self, key: KeyType, value: ValType) -> ValType:
         try:
@@ -482,6 +369,22 @@ class Bigdict(MutableMapping, Generic[ValType]):
         except KeyError:
             self[key] = value
             return value
+
+    def update(self, data: Iterable[tuple[KeyType, ValType]] | Mapping[KeyType, ValType], /) -> None:
+        sharddata = defaultdict(list)
+        encode_key = self.encode_key
+        encode_val = self.encode_value
+        shard = self._shard
+        if isinstance(data, Mapping):
+            for k, v in data.items():
+                kk = encode_key(k)
+                vv = encode_val(v)
+                s = shard(kk)
+                sharddata[s].append((kk, vv))
+
+        for sh, data in sharddata.items():
+            with self._transaction(sh).cursor() as cursor:
+                cursor.putmulti(data)
 
     def get(self, key: KeyType, default=None) -> ValType:
         try:
@@ -493,17 +396,17 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self.commit()
         decoder = self.decode_key
         for shard in self._shards():
-            cursor = self._read_txn(shard).cursor()
-            for k in cursor.iternext(keys=True, values=False):
-                yield decoder(k)
+            with self._db(shard).begin() as txn:
+                for k in txn.cursor().iternext(keys=True, values=False):
+                    yield decoder(k)
 
     def values(self) -> Iterator[ValType]:
         self.commit()
         decoder = self.decode_value
         for shard in self._shards():
-            cursor = self._read_txn(shard).cursor()
-            for v in cursor.iternext(keys=False, values=True):
-                yield decoder(v)
+            with self._db(shard).begin() as txn:
+                for v in txn.cursor().iternext(keys=False, values=True):
+                    yield decoder(v)
 
     def __iter__(self) -> Iterator[KeyType]:
         return self.keys()
@@ -513,9 +416,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
         decode_key = self.decode_key
         decode_val = self.decode_value
         for shard in self._shards():
-            cursor = self._read_txn(shard).cursor()
-            for key, value in cursor.iternext(keys=True, values=True):
-                yield decode_key(key), decode_val(value)
+            with self._db(shard).begin() as txn:
+                for key, value in txn.cursor().iternext(keys=True, values=True):
+                    yield decode_key(key), decode_val(value)
 
     def __contains__(self, key: KeyType) -> bool:
         try:
@@ -526,27 +429,17 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
     def __len__(self) -> int:
         self.commit()
-        # This `commit` is needed if `__len__` is called right after a "write buffer"
-        # has been `cursor.putmulti`-committed, but before things have fully settled
-        # (because of `map_async=True`).
-        # Because this calls `commit`, do NOT call `__len__` too often.
-
         n = 0
         for shard in self._shards():
-            n += len(self._wbuffers.get(shard, []))
             stat = self._db(shard).stat()
             n += stat["entries"]
         return n
 
     def __bool__(self) -> bool:
-        # Return `True` if the db is not empty.
-        # This counts content in buffers if `self._write_buffer_size > 1`.
+        self.commit()
         for shard in self._shards():
-            if self._wbuffers.get(shard):
-                return True
             stat = self._db(shard).stat()
-            n = stat["entries"]
-            if n:
+            if stat["entries"]:
                 return True
         return False
 
@@ -565,7 +458,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
         """
         After ``destroy``, disk data is erased and the object is no longer usable.
         """
-        self._close()
+        for x in self._transactions.values():
+            x.abort()
+        self._transactions = {}
         for x in self._dbs.values():
             x.close()
         self._dbs = {}
@@ -574,14 +469,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
             delattr(self, "info")
         except AttributeError:
             pass
-
-    def reload(self) -> None:
-        """
-        Call this on a reader object to pick up any recent writes performed
-        by another writer object since the creation of the reader object.
-        """
-        self._close()
-        self.info = json.load(open(os.path.join(self.path, "info.json"), "r"))
 
     def compact(self) -> None:
         """
