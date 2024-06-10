@@ -113,10 +113,10 @@ def mp_worker(d, q):
     q.put(1)
     assert q.get() == 2
 
-    assert d['b'] == 4
+    assert d["b"] == 4
     assert len(d) == 2
 
-    d['c'] = 9
+    d["c"] = 9
     d.commit()
     q.put(3)
 
@@ -139,7 +139,7 @@ def test_mp():
     q.put(2)
     assert q.get() == 3
 
-    assert bd['c'] == 9
+    assert bd["c"] == 9
 
     task.join()
     assert task.exitcode == 0
@@ -179,7 +179,7 @@ def test_thread():
         assert "3" not in data
         data["4"] = "d"
         data.commit()
-    
+
         assert "4" in data
         data.flush()
         # assert data["3"] == "c"
@@ -233,4 +233,3 @@ def test_shard():
     db2.destroy()
     db3.destroy()
     # Prevent their saving while `db.__del__()` has already deleted everything.
-

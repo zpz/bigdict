@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import uuid
 from collections import defaultdict
-from collections.abc import Iterator, MutableMapping, Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from hashlib import blake2b
 from typing import Generic, TypeVar
 
@@ -32,7 +32,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
     If reading and writing are mixed, calling `commit` after writing and before reading
     should eliminate most issues. There is no need to call `commit` between consecutive writings
     or consecutive readings, or after reading and before writing.
-    
+
     Across multiple threads in one process, there can be multiple readers but at most one writer at any time.
     If you want recent writing to be visible to readers (in the same or other threads), call `commit` after writing.
     If multiple threads write, call `commit` after a writing "streak" in one thread, and do not have overlapping
@@ -166,18 +166,20 @@ class Bigdict(MutableMapping, Generic[ValType]):
     def __reduce__(self):
         return (
             self._reduce_rebuild,
-            (type(self), self.path, self.map_size_mb, self.readonly)
+            (type(self), self.path, self.map_size_mb, self.readonly),
         )
 
     def __del__(self):
         # Although this tries to flush unsaved changes, this is not totally reliable.
         # It is recommended to explicitly `flush` before you leave
         # after you make any writes, including updates to `info`.
-        if getattr(self, "info", None) is not None:  # otherwise `destroy` has been called
+        if (
+            getattr(self, "info", None) is not None
+        ):  # otherwise `destroy` has been called
             try:
                 self.flush()
             except FileNotFoundError as e:
-                if '/info.json' in str(e):
+                if "/info.json" in str(e):
                     # Could not find the 'info' file or folder;
                     # could happen if this db has been "destroyed" by another client
                     pass
@@ -370,7 +372,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
             self[key] = value
             return value
 
-    def update(self, data: Iterable[tuple[KeyType, ValType]] | Mapping[KeyType, ValType], /) -> None:
+    def update(
+        self, data: Iterable[tuple[KeyType, ValType]] | Mapping[KeyType, ValType], /
+    ) -> None:
         sharddata = defaultdict(list)
         encode_key = self.encode_key
         encode_val = self.encode_value
