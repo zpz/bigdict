@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import os.path
@@ -11,7 +12,6 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from hashlib import blake2b
 from typing import Generic, TypeVar
-import itertools
 
 import lmdb
 
@@ -180,11 +180,11 @@ class Bigdict(MutableMapping, Generic[ValType]):
         )
 
     def _close(self):
-        if not hasattr(self, 'info'):
+        if not hasattr(self, "info"):
             return  # `destroy` has been called
         if self.readonly:
             return
-        
+
         try:
             self.flush()
         except FileNotFoundError as e:
@@ -205,7 +205,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
             x.close()
         self._dbs = {}
 
-
     def __del__(self):
         # If not using context manager, then
         # this tries to flush unsaved changes, but this is not totally reliable.
@@ -215,7 +214,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
     def __enter__(self):
         return self
-    
+
     def __exit__(self, *args, **kwargs):
         self._close()
 
@@ -387,7 +386,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
             for x in self._transactions.values():
                 x.commit()
             self._num_pending_writes = 0
-        
+
         # If `self._num_pending_writes == 0`, there can still be
         # transactions created by `__getitem__`, but they did not perform
         # any write.
@@ -395,7 +394,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
         # if not self.readonly:
         #     for db in self._dbs.values():
         #         db.sync()
-
 
     def flush(self) -> None:
         """
@@ -433,7 +431,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         before pickling (or convert to bytes in a whole diff way w/o pickling).
         Corresponding customization should happen in :meth:`decode_value`.
 
-        If a subclass uses bytes values, it may want to customize :meth:`encode_value` and 
+        If a subclass uses bytes values, it may want to customize :meth:`encode_value` and
         :meth:`decode_value` to skip encoding and decoding.
         """
         return pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
@@ -507,12 +505,15 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return value
 
     def update(
-        self, data: Iterable[tuple[KeyType, ValType]] | Mapping[KeyType, ValType] = (), /, **kwargs
+        self,
+        data: Iterable[tuple[KeyType, ValType]] | Mapping[KeyType, ValType] = (),
+        /,
+        **kwargs,
     ) -> None:
-        '''
+        """
         If you write a large number of entries, using :meth:`update` with large batches can have considerable speed gains
         compared to using :meth:`__setitem__` to add entries one by one.
-        '''   
+        """
 
         if self.readonly:
             raise ReadonlyError("update: Permission denied")
@@ -610,7 +611,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         After ``destroy``, disk data is erased and the object is no longer usable.
         """
         if self.readonly:
-            raise ReadonlyError(f"destroy: Permission denied")
+            raise ReadonlyError("destroy: Permission denied")
 
         for x in self._transactions.values():
             x.abort()
@@ -644,7 +645,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         (now pointing to a new, compact version) can continue to be used.
         """
         if self.readonly:
-            raise ReadonlyError(f"compact: Permission denied")
+            raise ReadonlyError("compact: Permission denied")
 
         self.flush()
 

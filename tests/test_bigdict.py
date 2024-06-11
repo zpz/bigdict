@@ -1,10 +1,9 @@
 import multiprocessing
 import pickle
 import queue
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from time import sleep
 from uuid import uuid4
-import threading
 
 import pytest
 from bigdict import Bigdict, ReadonlyError
@@ -24,14 +23,14 @@ def test_basics():
     uid = str(uuid4())
     bd["uid"] = uid
 
-    assert bd['a'] == 3
+    assert bd["a"] == 3
     assert bd.setdefault("a", 4) == 3
     assert bd.setdefault("c", 4) == 4
 
     assert bd["a"] == 3
 
-    del bd['a']
-    assert 'a' not in bd
+    del bd["a"]
+    assert "a" not in bd
 
     assert len(bd) == 4
 
@@ -39,7 +38,7 @@ def test_basics():
     assert bd["c"] == 4
     assert len(bd) == 5
 
-    bd.update(a='a')
+    bd.update(a="a")
     assert bd["a"] == "a"
 
     with pytest.raises(KeyError):
@@ -60,16 +59,16 @@ def test_basics():
     assert bd2["uid"] == uid
 
     del bd["c"]
-    assert 'c' not in bd
+    assert "c" not in bd
 
     # Before `bd` commit, the other reader does not see the change.
-    assert bd2['c'] == 4
-    assert 'c' in bd2
+    assert bd2["c"] == 4
+    assert "c" in bd2
 
     bd.commit()
     # After writer commit, the other reader sees the changes.
     with pytest.raises(KeyError):
-        assert bd2['c'] == 4
+        assert bd2["c"] == 4
 
     with pytest.raises(KeyError):
         del bd["99"]
@@ -84,21 +83,21 @@ def test_basics():
 
     with pytest.raises(ReadonlyError):
         bd2.destroy()
-    
-    with pytest.raises(ReadonlyError):
-        bd2['f'] = 3
 
     with pytest.raises(ReadonlyError):
-        bd2.pop('a')
+        bd2["f"] = 3
 
     with pytest.raises(ReadonlyError):
-        bd2.setdefault('a', 2)
+        bd2.pop("a")
 
     with pytest.raises(ReadonlyError):
-        del bd2['b']
+        bd2.setdefault("a", 2)
 
     with pytest.raises(ReadonlyError):
-        bd2.update([('z', 100)])
+        del bd2["b"]
+
+    with pytest.raises(ReadonlyError):
+        bd2.update([("z", 100)])
 
     with pytest.raises(ReadonlyError):
         bd2.commit()
@@ -145,14 +144,14 @@ def mp_worker(path, map_size_mb, q):
 
 
 def test_mp():
-    for executor in ('thread', 'process'):
-        print('executor:', executor)
+    for executor in ("thread", "process"):
+        print("executor:", executor)
 
         bd = Bigdict.new()
         bd["a"] = 3
         bd.commit()
 
-        if executor == 'thread':
+        if executor == "thread":
             q = queue.Queue()
             cls = threading.Thread
         else:
@@ -170,7 +169,7 @@ def test_mp():
 
         q.put(2)
         sleep(0.2)
-    
+
         assert q.get() == 3
 
         assert bd["c"] == 9
@@ -179,12 +178,11 @@ def test_mp():
         bd.destroy()
 
 
-
 def th_worker(data, e1, e2):
     # data = Bigdict(path, readonly=True)
 
     assert len(data) == 2
-    assert data['1'] == 'a'
+    assert data["1"] == "a"
     data.commit()
 
     e2.set()
@@ -194,7 +192,7 @@ def th_worker(data, e1, e2):
     # data.commit()
 
     assert data["4"] == "d"
-    assert '3' not in data
+    assert "3" not in data
     assert len(data) == 3
 
 
@@ -240,7 +238,7 @@ def test_shard():
     data = [str(uuid4()) for _ in range(N)]
     for d in data:
         db[d] = d
-    
+
     db.flush()
 
     assert len(db._shards()) == 16
