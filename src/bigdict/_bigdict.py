@@ -11,6 +11,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from hashlib import blake2b
 from typing import Generic, TypeVar
+import itertools
 
 import lmdb
 
@@ -20,28 +21,23 @@ KeyType = str
 ValType = TypeVar("ValType")
 
 
+ReadonlyError = lmdb.ReadonlyError
+
+
+# TODO: `Generic[KeyType, ValType]`
+# seems to require a newer Python version.
 class Bigdict(MutableMapping, Generic[ValType]):
     """
-    In the target use cases, writing and reading are well separated.
+    In many use cases, writing and reading are well separated.
     Usually one creates a database and writes data into it.
     Once that's done, it's no longer appended to or revised; it's just
     used for reading.
 
-    You may need to use extra caution in other usage patterns.
+    If you mix reading and writing operations, see doc on the method :meth:`commit`.
 
-    If reading and writing are mixed, calling `commit` after writing and before reading
-    should eliminate most issues. There is no need to call `commit` between consecutive writings
-    or consecutive readings, or after reading and before writing.
+    For precautions in threading and multiprocessing, see doc on :meth:`commit`.
 
-    Across multiple threads in one process, there can be multiple readers but at most one writer at any time.
-    If you want recent writing to be visible to readers (in the same or other threads), call `commit` after writing.
-    If multiple threads write, call `commit` after a writing "streak" in one thread, and do not have overlapping
-    writing streaks in threads.
-
-    Follow these same rules in multiprocessing.
-
-    If you write a large number of entries, using `update` with large batches is much more efficient than
-    individual writes via `__setitem__`.
+    At the end of a writing session, call :meth:`flush`.
     """
 
     @classmethod
@@ -115,6 +111,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
             (I did not read about this in documentation, nor do I understand how memory-mapping works.)
             You are free to choose a ``map_size_mb`` value unrelated to the value used when creating
             the database files, as long as the value is large enough for your application.
+
+            This is not an intrinsic attribute of the database file(s).
+            It seems that you are free to use different values of this in different readers
+            of the same DB. But, to be worry free, it may be a good idea to use the same value.
         """
         self.path = os.path.abspath(path)
 
@@ -145,6 +145,12 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self._dbs = {}
         self._transactions = {}
 
+        self._write_commit_interval = 1_000_000
+        # You may change this value any time.
+
+        self._num_pending_writes = 0
+        # This is for internal use. Do not modify its value.
+
     @property
     def readonly(self):
         return self._readonly
@@ -160,41 +166,58 @@ class Bigdict(MutableMapping, Generic[ValType]):
         return self.__repr__()
 
     @staticmethod
-    def _reduce_rebuild(cls, path, map_size_mb, readonly):
-        return cls(path, map_size_mb=map_size_mb, readonly=readonly)
+    def _reduce_rebuild(cls, path, map_size_mb):
+        return cls(path, map_size_mb=map_size_mb, readonly=True)
 
     def __reduce__(self):
+        # Probably all the uses for pickling is to send the object to another process.
+        # Always send a readonly object.
+        # If you need a read/write object, just pass the essential arguments and create an object
+        # "manually".
         return (
             self._reduce_rebuild,
-            (type(self), self.path, self.map_size_mb, self.readonly),
+            (type(self), self.path, self.map_size_mb),
         )
 
+    def _close(self):
+        if not hasattr(self, 'info'):
+            return  # `destroy` has been called
+        if self.readonly:
+            return
+        
+        try:
+            self.flush()
+        except FileNotFoundError as e:
+            if "/info.json" in str(e):
+                # Could not find the 'info' file or folder;
+                # could happen if this db has been "destroyed" by another client
+                pass
+            else:
+                raise
+        except NameError as e:
+            if str(e) == "name 'open' is not defined":
+                # Could happen during interpreter shutdown.
+                pass
+            else:
+                raise
+
+        for x in self._dbs.values():
+            x.close()
+        self._dbs = {}
+
+
     def __del__(self):
-        # Although this tries to flush unsaved changes, this is not totally reliable.
+        # If not using context manager, then
+        # this tries to flush unsaved changes, but this is not totally reliable.
         # It is recommended to explicitly `flush` before you leave
         # after you make any writes, including updates to `info`.
-        if (
-            getattr(self, "info", None) is not None
-        ):  # otherwise `destroy` has been called
-            try:
-                self.flush()
-            except FileNotFoundError as e:
-                if "/info.json" in str(e):
-                    # Could not find the 'info' file or folder;
-                    # could happen if this db has been "destroyed" by another client
-                    pass
-                else:
-                    raise
-            except NameError as e:
-                if str(e) == "name 'open' is not defined":
-                    # Could happen during interpreter shutdown.
-                    pass
-                else:
-                    raise
+        self._close()
 
-            for x in self._dbs.values():
-                x.close()
-            self._dbs = {}
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, *args, **kwargs):
+        self._close()
 
     def _shards(self) -> list[str]:
         # Return existing shards.
@@ -283,6 +306,13 @@ class Bigdict(MutableMapping, Generic[ValType]):
             self._transactions[shard] = txn
         return self._transactions[shard]
 
+    def _track_write(self, n: int):
+        if n < 1:
+            return
+        self._num_pending_writes += n
+        if self._num_pending_writes >= self._write_commit_interval:
+            self.commit()
+
     def commit(self):
         """
         Commit and close all pending transactions.
@@ -292,16 +322,96 @@ class Bigdict(MutableMapping, Generic[ValType]):
         the info file is significant in your use case (because for some reason
         you need to commit writes frequently), you can call ``commit`` instead
         of ``flush``.
+
+        This is meaningful and allowed only when `self.readonly` is `False`.
+
+        This is called automatically once a certain number of write operations
+        (see `self._write_commit_interval`) have been conducted.
+        However, in some situations you want to call this explicitly.
+
+        In addition to automatic invocations at specified write intervals,
+        this is also called when exiting context manager or when the object is garbage collected.
+        However, to be explicit, it is recommended to call `commit` or `flush`
+        at the end of a write session.
+
+        If you use a single read/write object and interleave reading/writing operations,
+        there is no need to call `commit` (so far as I have observed in tests). In other words,
+        recent writings appear to be visible to reading, even though the writings do not seem
+        to have been "committed".
+
+        If you use multiple `Bigdict` objects to operate on the same underlying DB (and files),
+        you need to use some cautions. (All discussions here about "multiple Bigdict objects"
+        are in this sense. If they represent different DBs, they do not interfere with each other.)
+        The core reason is related to the use of "transactions" in this class.
+
+        In "readonly" mode, each read method opens a readonly transaction and closes it at the end
+        of the method. However, note the methods :meth:`keys`, :meth:`values`, :meth:`items`
+        are generators, hence the transaction's lifetime overlaps with other operations.
+
+        In "read/write" mode, a read/write transaction remains alive across method calls; both read
+        and write methods use this transaction. This makes writes immediately visible to subsequent reads
+        regardless of commit or not (so far it seems to me). The transaction is closed by `commit`.
+        Note that `commit` is automatically called at writing intervals, is also called
+        at the beginning of several read methods (e.g., :method:`__len__`, :meth:`keys`, :meth:`values`,
+        :meth:`items`), and may be called by the user anytime.
+
+        If you use a read/write object to do reading only (which is NOT recommended), there is still
+        a read/write transaction lurking there.
+
+        If you use multiple `Bigdict` objects in one thread, or multiple threads, or multiple processes,
+        remember this:
+
+            There must be at most one read/write transaction living at any moment.
+
+        Again, the method `commit` commits and **closes** the transaction, giving other objects a chance
+        to start a new read/write transaction.
+
+        Two read/write transactions living at the same time tend to hang the program. (This is the case
+        even if you use a read/write object to do reading only---it still uses a read/write transaction.)
+
+        After writing, if you want another object to read the changes right away, you may need to explicitly call
+        :meth:`commit` on the first object.
+
+        A read/write transaction can NOT be used in two threads. If you pass a read/write Bigdict to another thread,
+        you need to call :meth:`commit` in the two threads (on the same object) at carefully coordinated times so that
+        method calls (be it reading or writing) in the two threads do not use the same transaction. Indeed,
+        to save yourself the trouble, do NOT pass a read/write object to another thread.
+
+        In a long writing session (meaning inserting a large number of entries), the design of using a living transaction
+        without too frequent commits has very significant performance benefits.
         """
-        for x in self._transactions.values():
-            x.commit()
+        if self.readonly:
+            raise ReadonlyError("commit: Permission denied")
+
+        if self._num_pending_writes > 0:
+            for x in self._transactions.values():
+                x.commit()
+            self._num_pending_writes = 0
+        
+        # If `self._num_pending_writes == 0`, there can still be
+        # transactions created by `__getitem__`, but they did not perform
+        # any write.
         self._transactions = {}
+        # if not self.readonly:
+        #     for db in self._dbs.values():
+        #         db.sync()
+
+
+    def flush(self) -> None:
+        """
+        ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
+
+        Do not call this after every write; instead, call this after a writing "session"
+        to be sure all updates (including to `self.info`) are persisted.
+        """
+        self.commit()
+        json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
 
     def encode_key(self, k: KeyType) -> bytes:
         """
         The key should be a str.
 
-        If a subclass uses bytes, then it should
+        If a subclass uses bytes, it may want to
         customize :meth:`encode_key` and :meth:`decode_key` to skip encoding
         and decoding.
 
@@ -321,7 +431,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
         If ``v`` is not of a "native" Python class like str, dict, etc.,
         subclass should customize this method to convert ``v`` to a native type
         before pickling (or convert to bytes in a whole diff way w/o pickling).
-        Correspnoding customization should happen in :meth:`decode_value`.
+        Corresponding customization should happen in :meth:`decode_value`.
+
+        If a subclass uses bytes values, it may want to customize :meth:`encode_value` and 
+        :meth:`decode_value` to skip encoding and decoding.
         """
         return pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -333,13 +446,25 @@ class Bigdict(MutableMapping, Generic[ValType]):
         shard = self._shard(key)
         value = self.encode_value(value)
         self._transaction(shard).put(key, value)
+        # This raises ReadonlyError if `self.readonly` is True.
+        self._track_write(1)
 
     def __getitem__(self, key: KeyType) -> ValType:
         k = self.encode_key(key)
         shard = self._shard(k)
 
         try:
-            v = self._transaction(shard).get(k)
+            if self.readonly:
+                with self._db(shard).begin() as txn:
+                    v = txn.get(k)
+                    # Using a new transaction on each read.
+                    # If other objects have written, as long as they have committed,
+                    # the changes will be visible to this read.
+            else:
+                v = self._transaction(shard).get(k)
+                # In a read-write env, this will use the existing transaction,
+                # which may have just written but haven't committed;
+                # those writes will be visible here.
         except lmdb.PageNotFoundError:
             raise KeyError(key)
         # `v` can't be `None` as a valid return from the db,
@@ -352,10 +477,15 @@ class Bigdict(MutableMapping, Generic[ValType]):
         k = self.encode_key(key)
         shard = self._shard(k)
         z = self._transaction(shard).delete(k)
+        # This raises ReadonlyError if `self.readonly` is True.
         if not z:
             raise KeyError(key)
+        self._track_write(1)
 
     def pop(self, key: KeyType, default=UNSET) -> ValType:
+        if self.readonly:
+            raise ReadonlyError("pop: Permission denied")
+
         k = self.encode_key(key)
         shard = self._shard(k)
         v = self._transaction(shard).pop(k)
@@ -363,41 +493,60 @@ class Bigdict(MutableMapping, Generic[ValType]):
             if default is UNSET:
                 raise KeyError(key)
             return default
+        self._track_write(1)
         return self.decode_value(v)
 
     def setdefault(self, key: KeyType, value: ValType) -> ValType:
+        if self.readonly:
+            raise ReadonlyError("setdefault: Permission denied")
+
         try:
             return self[key]
         except KeyError:
-            self[key] = value
+            self.__setitem__(key, value)
             return value
 
     def update(
-        self, data: Iterable[tuple[KeyType, ValType]] | Mapping[KeyType, ValType], /
+        self, data: Iterable[tuple[KeyType, ValType]] | Mapping[KeyType, ValType] = (), /, **kwargs
     ) -> None:
+        '''
+        If you write a large number of entries, using :meth:`update` with large batches can have considerable speed gains
+        compared to using :meth:`__setitem__` to add entries one by one.
+        '''   
+
+        if self.readonly:
+            raise ReadonlyError("update: Permission denied")
+
         sharddata = defaultdict(list)
         encode_key = self.encode_key
         encode_val = self.encode_value
         shard = self._shard
         if isinstance(data, Mapping):
-            for k, v in data.items():
-                kk = encode_key(k)
-                vv = encode_val(v)
-                s = shard(kk)
-                sharddata[s].append((kk, vv))
+            other = data.items()
+        else:
+            other = data
+        for k, v in itertools.chain(other, kwargs.items()):
+            kk = encode_key(k)
+            vv = encode_val(v)
+            s = shard(kk)
+            sharddata[s].append((kk, vv))
 
-        for sh, data in sharddata.items():
+        n = 0
+        for sh, values in sharddata.items():
             with self._transaction(sh).cursor() as cursor:
-                cursor.putmulti(data)
+                cursor.putmulti(values)
+                n += len(values)
+        self._track_write(n)
 
     def get(self, key: KeyType, default=None) -> ValType:
         try:
-            return self[key]
+            return self.__getitem__(key)
         except KeyError:
             return default
 
     def keys(self) -> Iterator[KeyType]:
-        self.commit()
+        if not self.readonly:
+            self.commit()
         decoder = self.decode_key
         for shard in self._shards():
             with self._db(shard).begin() as txn:
@@ -405,7 +554,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
                     yield decoder(k)
 
     def values(self) -> Iterator[ValType]:
-        self.commit()
+        if not self.readonly:
+            self.commit()
         decoder = self.decode_value
         for shard in self._shards():
             with self._db(shard).begin() as txn:
@@ -416,7 +566,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
         return self.keys()
 
     def items(self) -> Iterator[tuple[KeyType, ValType]]:
-        self.commit()
+        if not self.readonly:
+            self.commit()
         decode_key = self.decode_key
         decode_val = self.decode_value
         for shard in self._shards():
@@ -432,7 +583,13 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return False
 
     def __len__(self) -> int:
-        self.commit()
+        if not self.readonly:
+            self.commit()
+        # If there are recent writes in the same object, they may not be counted
+        # w/o commit.
+        # TODO:
+        # we could track count changes in a writer w/o `commit`.
+
         n = 0
         for shard in self._shards():
             stat = self._db(shard).stat()
@@ -440,31 +597,25 @@ class Bigdict(MutableMapping, Generic[ValType]):
         return n
 
     def __bool__(self) -> bool:
-        self.commit()
+        if not self.readonly:
+            self.commit()
         for shard in self._shards():
             stat = self._db(shard).stat()
             if stat["entries"]:
                 return True
         return False
 
-    def flush(self) -> None:
-        """
-        ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
-        Before ``flush`` is called, recent writes may not be available to reading.
-
-        Do not call this after every write; instead, call this after a write "session",
-        before you'done writing or you need to read.
-        """
-        self.commit()
-        json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
-
     def destroy(self) -> None:
         """
         After ``destroy``, disk data is erased and the object is no longer usable.
         """
+        if self.readonly:
+            raise ReadonlyError(f"destroy: Permission denied")
+
         for x in self._transactions.values():
             x.abort()
         self._transactions = {}
+        self._num_pending_writes = 0
         for x in self._dbs.values():
             x.close()
         self._dbs = {}
@@ -488,10 +639,15 @@ class Bigdict(MutableMapping, Generic[ValType]):
         This is an expensive operation. Don't do this often. You may want to do this
         at the end of a long writing session, and just before you are about to transfer
         the dataset files to another storage media.
+
+        After successful completion of this method, the current object
+        (now pointing to a new, compact version) can continue to be used.
         """
-        # It is likely that after calling this method, the current object is no longer usable.
-        # This is not carefully considered yet.
+        if self.readonly:
+            raise ReadonlyError(f"compact: Permission denied")
+
         self.flush()
+
         for x in self._dbs.values():
             x.close()
         self._dbs = {}
