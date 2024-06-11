@@ -1,6 +1,17 @@
 # Changelog
 
 
+## [0.3.0] - 2024-06-11
+
+Significant refactor with simplifications, corrections, and enhancements.
+
+- Complete redesign around the use of transactions. Do not use separate transactions for reading and writing.
+- Added method `update`.
+- Do not call `destroy` in `__del__`.
+- Removed parameter `keep_files` to `Bigdict.new`.
+- Added parameter `readonly` to `__init__`, default to `True`.
+
+
 ## [0.2.9] - 2024-02-17
 
 - Changed Python requirement to 3.10.

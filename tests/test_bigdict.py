@@ -1,16 +1,16 @@
 import multiprocessing
 import pickle
 import queue
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from time import sleep
 from uuid import uuid4
 
 import pytest
-from bigdict import Bigdict
+from bigdict import Bigdict, ReadonlyError
 
 
-def test_bigdict():
-    bd: Bigdict[int] = Bigdict.new()
+def test_basics():
+    bd: Bigdict = Bigdict.new(map_size_mb=64)
     print(bd)
 
     assert list(bd.keys()) == []
@@ -18,36 +18,27 @@ def test_bigdict():
     assert list(bd.items()) == []
 
     bd["a"] = 3
-    bd["b"] = 4
-    bd.destroy()
-
-    bd: Bigdict = Bigdict.new()
-    bd["a"] = 3
     bd["9"] = [1, 2, "a"]
     bd["b"] = {"a": 3, "b": 4}
     uid = str(uuid4())
     bd["uid"] = uid
 
-    assert (
-        bd.setdefault("a", 4) == 4
-    )  # the un-commited 'a' is invisible and hence overwritten
+    assert bd["a"] == 3
+    assert bd.setdefault("a", 4) == 3
     assert bd.setdefault("c", 4) == 4
 
-    with pytest.raises(KeyError):
-        # Not available before flush:
-        assert bd["a"] == 3
+    assert bd["a"] == 3
 
-    # Length is not correct before flush:
-    assert len(bd) == 0
+    del bd["a"]
+    assert "a" not in bd
 
-    bd.flush()
-    assert bd["a"] == 4
-    assert bd.setdefault("a", 5) == 4
+    assert len(bd) == 4
+
+    assert bd.setdefault("a", 5) == 5
     assert bd["c"] == 4
     assert len(bd) == 5
 
-    bd["a"] = "a"
-    bd.flush()
+    bd.update(a="a")
     assert bd["a"] == "a"
 
     with pytest.raises(KeyError):
@@ -56,11 +47,9 @@ def test_bigdict():
     assert bd.get("g", 999) == 999
 
     assert bd.pop("a") == "a"
-    assert bd["a"] == "a"
-    bd.flush()
     assert "a" not in bd
 
-    bd2 = Bigdict(bd.path, map_size_mb=32)
+    bd2 = Bigdict(bd.path, map_size_mb=32, readonly=True)
     # apparently `map_size` is not an attribute of the database file---you
     # can choose another `map_size` when reading.
 
@@ -70,7 +59,16 @@ def test_bigdict():
     assert bd2["uid"] == uid
 
     del bd["c"]
-    bd.flush()
+    assert "c" not in bd
+
+    # Before `bd` commit, the other reader does not see the change.
+    assert bd2["c"] == 4
+    assert "c" in bd2
+
+    bd.commit()
+    # After writer commit, the other reader sees the changes.
+    with pytest.raises(KeyError):
+        assert bd2["c"] == 4
 
     with pytest.raises(KeyError):
         del bd["99"]
@@ -78,57 +76,33 @@ def test_bigdict():
     with pytest.raises(KeyError):
         bd.pop("99")
 
-    assert "c" not in bd
     assert len(bd) == 3
-
-    assert sorted(bd.keys(), key=lambda k: bd.encode_key(k)) == sorted(
-        ["9", "b", "uid"], key=lambda k: bd.encode_key(k)
-    )
-
-    # deletion is not reflected in the other reader:
-    assert bd2["c"] == 4
-    assert "c" in bd2
-    # but length is somehow queries on demand:
     assert len(bd2) == 3
 
-    bd2.reload()
-    assert "c" not in bd2
-    with pytest.raises(KeyError):
-        assert bd2["c"] == 4
+    assert sorted(bd.keys()) == sorted(["9", "b", "uid"])
 
-    assert len(bd2) == 3
+    with pytest.raises(ReadonlyError):
+        bd2.destroy()
 
-    bd2.destroy()
-    # Prevent its saving while everything has been deleted by `db.__del__()`.
+    with pytest.raises(ReadonlyError):
+        bd2["f"] = 3
 
+    with pytest.raises(ReadonlyError):
+        bd2.pop("a")
 
-def test_rollback():
-    db = Bigdict.new()
-    db["a"] = 3
-    db["b"] = 4
-    db.flush()
+    with pytest.raises(ReadonlyError):
+        bd2.setdefault("a", 2)
 
-    try:
-        db["c"] = 9
-        db["d"] = 10
-        raise ValueError(3)
-    except Exception:
-        db.rollback()
-    else:
-        db.commit()
+    with pytest.raises(ReadonlyError):
+        del bd2["b"]
 
-    assert "c" not in db
-    assert "d" not in db
-    db.commit()
-    assert "c" not in db
-    assert "d" not in db
+    with pytest.raises(ReadonlyError):
+        bd2.update([("z", 100)])
 
-    db["c"] = 9
-    db["d"] = 10
-    db.commit()
-    assert "c" in db
-    db.rollback()
-    assert "d" in db
+    with pytest.raises(ReadonlyError):
+        bd2.commit()
+
+    bd.destroy()
 
 
 def test_pickle():
@@ -139,56 +113,87 @@ def test_pickle():
 
     dd = pickle.dumps(data)
     data2 = pickle.loads(dd)
+    # `data2` and `data` can co-exist between the latter is readonly.
+
     assert len(data2) == 2
     assert data2["1"] == 3
     assert data2["2"] == "b"
 
 
-def mp_worker(d, q):
+def mp_worker(path, map_size_mb, q):
+    d = Bigdict(path, map_size_mb=map_size_mb, readonly=False)
+
+    assert len(d) == 1
     assert d["a"] == 3
     assert "b" not in d
-    assert len(d) == 1
+
+    d.commit()
+
     q.put(1)
+    sleep(0.2)
+
     assert q.get() == 2
 
-    # new write is not visible until reload
-    assert "b" not in d
+    assert d["b"] == 4
 
-    # current length is accurate w/o reload
     assert len(d) == 2
 
-    d.reload()
-    assert "b" in d
-    assert len(d) == 2
+    d["c"] = 9
+    d.commit()
+    q.put(3)
 
 
 def test_mp():
-    bd = Bigdict.new()
-    bd["a"] = 3
-    bd.flush()
+    for executor in ("thread", "process"):
+        print("executor:", executor)
 
-    ctx = multiprocessing.get_context("spawn")
-    q = ctx.Queue()
-    task = ctx.Process(target=mp_worker, args=(bd, q))
-    task.start()
-    assert q.get() == 1
-    bd["b"] = 4
-    bd.flush()
-    sleep(1)
-    q.put(2)
+        bd = Bigdict.new()
+        bd["a"] = 3
+        bd.commit()
 
-    task.join()
-    assert task.exitcode == 0
+        if executor == "thread":
+            q = queue.Queue()
+            cls = threading.Thread
+        else:
+            ctx = multiprocessing.get_context("spawn")
+            q = ctx.Queue()
+            cls = ctx.Process
+
+        task = cls(target=mp_worker, args=(bd.path, bd.map_size_mb, q))
+        task.start()
+
+        assert q.get() == 1
+
+        bd["b"] = 4
+        bd.commit()
+
+        q.put(2)
+        sleep(0.2)
+
+        assert q.get() == 3
+
+        assert bd["c"] == 9
+
+        task.join()
+        bd.destroy()
 
 
-def th_worker(data, q):
+def th_worker(data, e1, e2):
+    # data = Bigdict(path, readonly=True)
+
     assert len(data) == 2
-    data["3"] = "c"
-    q.put(1)
-    sleep(0.2)
-    assert q.get() == 1
+    assert data["1"] == "a"
+    data.commit()
+
+    e2.set()
+    e1.wait()
+
+    # data["3"] = "c"
+    # data.commit()
+
     assert data["4"] == "d"
-    assert len(data) == 4
+    assert "3" not in data
+    assert len(data) == 3
 
 
 def test_thread():
@@ -197,28 +202,28 @@ def test_thread():
     data["2"] = "b"
     data.flush()
 
-    # Main thread and the child thread share write/read transactions.
-    # But the sleep durations are tricky.
+    e1, e2 = threading.Event(), threading.Event()
 
-    q = queue.Queue()
-    with ThreadPoolExecutor(1) as pool:
-        task = pool.submit(th_worker, data, q)
-        sleep(0.1)
-        assert q.get() == 1
-        assert "3" not in data
-        data["4"] = "d"
-        assert "4" not in data
-        data.flush()
-        assert data["3"] == "c"
-        assert data["4"] == "d"
-        q.put(1)
-        sleep(0.1)
+    task = threading.Thread(target=th_worker, args=(data, e1, e2))
+    task.start()
 
-        task.result()
+    e2.wait()
+
+    assert "3" not in data
+    data["4"] = "d"
+
+    assert "4" in data
+    data.commit()
+    # assert data["3"] == "c"
+    assert data["4"] == "d"
+    e1.set()
+
+    task.join()
+    data.destroy()
 
 
 def test_destroy():
-    data = Bigdict.new(keep_files=True)
+    data = Bigdict.new()
     data["1"] = "a"
     data["2"] = "b"
     data.flush()
@@ -228,12 +233,16 @@ def test_destroy():
 def test_shard():
     N = 10000
     db = Bigdict.new(shard_level=16)
+    print()
+
     data = [str(uuid4()) for _ in range(N)]
     for d in data:
         db[d] = d
+
     db.flush()
 
     assert len(db._shards()) == 16
+
     assert len(db) == N
 
     for d in data:
@@ -243,9 +252,10 @@ def test_shard():
     assert sorted(data) == sorted(db.values())
 
     db.compact()
+    print(db._num_pending_writes)
+
     assert not db._dbs
-    assert not db._wtxns
-    assert not db._rtxns
+    assert not db._transactions
 
     assert sorted(data) == sorted(db)  # calls `db.keys()`
     assert sorted(data) == sorted(db.values())
@@ -258,6 +268,4 @@ def test_shard():
     assert sorted(data) == sorted(db3)  # calls `db.keys()`
     assert sorted(data) == sorted(db3.values())
 
-    db2.destroy()
-    db3.destroy()
-    # Prevent their saving while `db.__del__()` has already deleted everything.
+    db.destroy()
