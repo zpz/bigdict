@@ -11,15 +11,15 @@ import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from hashlib import blake2b
-from typing import Generic, TypeVar
 from multiprocessing.util import Finalize
+from typing import Generic, TypeVar
 
 import lmdb
 
 UNSET = object()
 
 KeyType = str
-ValType = TypeVar("ValType")
+ValType = TypeVar('ValType')
 
 
 ReadonlyError = lmdb.ReadonlyError
@@ -64,15 +64,15 @@ class Bigdict(MutableMapping, Generic[ValType]):
         """
         assert shard_level in (0, 1, 8, 16, 32, 64, 128, 256)
         info = {
-            "storage_version": 2,
+            'storage_version': 2,
             # `storage_version = 1` is introduced in release 0.2.0.
             # It was missing before that, and treated as 0.
             # Version 0 used a RocksDB backend;
             # version 1+ uses a LMDB backend.
             # `storage_version = 2` is introduced in release 0.2.9 in light of
             # a bug in version 1.
-            "shard_level": shard_level,
-            "key_pickle_protocol": 5,  # Added in 0.2.7. Record this to ensure consistency between insert and query times.
+            'shard_level': shard_level,
+            'key_pickle_protocol': 5,  # Added in 0.2.7. Record this to ensure consistency between insert and query times.
         }
 
         if path is None:
@@ -81,7 +81,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         assert not os.path.isdir(path)
         os.makedirs(path)
 
-        json.dump(info, open(os.path.join(path, "info.json"), "w"))
+        json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
         z = cls(path, readonly=False, **kwargs)
         return z
 
@@ -116,26 +116,26 @@ class Bigdict(MutableMapping, Generic[ValType]):
         """
         self.path = os.path.abspath(path)
 
-        self.info = json.load(open(os.path.join(path, "info.json"), "r"))
+        self.info = json.load(open(os.path.join(path, 'info.json'), 'r'))
 
-        self._storage_version = self.info.get("storage_version", 0)
+        self._storage_version = self.info.get('storage_version', 0)
         if self._storage_version == 0:
             raise RuntimeError(
-                "Support for RocksDB storage is removed in version 0.2.8. Please use Bigdict <= 0.2.7 to migrate this old dataset to the new format."
+                'Support for RocksDB storage is removed in version 0.2.8. Please use Bigdict <= 0.2.7 to migrate this old dataset to the new format.'
             )
             # This turned from warning to error in version 0.2.8 because installing rocksdb had issues.
 
-        self._key_pickle_protocol = self.info.get("key_pickle_protocol", 5)
+        self._key_pickle_protocol = self.info.get('key_pickle_protocol', 5)
         # This value is in `self.info` starting with 0.2.7.
 
-        self._shard_level = self.info.get("shard_level", 0)
+        self._shard_level = self.info.get('shard_level', 0)
         # DO NOT EVER manually modify ``self._storage_version`` and ``self._shard_level``.
 
         if self._storage_version == 1 and self._shard_level > 1:
             # "storage version 1" has a bug when "shard level > 1" so that persisted datasets
             # can not be read back in reliably.
             raise RuntimeError(
-                "Storage version 1 is no longer supported. Please create new datasets to use a newer storage format."
+                'Storage version 1 is no longer supported. Please create new datasets to use a newer storage format.'
             )
 
         self._map_size_mb = map_size_mb
@@ -210,9 +210,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
         dbs.clear()
 
         try:
-            json.dump(info, open(os.path.join(path, "info.json"), "w"))
+            json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
         except FileNotFoundError as e:
-            if "/info.json" in str(e):
+            if '/info.json' in str(e):
                 # Could not find the 'info' file or folder;
                 # could happen if this db has been "destroyed".
                 pass
@@ -229,11 +229,11 @@ class Bigdict(MutableMapping, Generic[ValType]):
         # Return existing shards.
         # The shards permitted by `self._shard_level` may not all be existing (yet).
         if self._shard_level <= 1:
-            return ["0"]
+            return ['0']
 
         files = []
         try:
-            for f in os.listdir(os.path.join(self.path, "db")):
+            for f in os.listdir(os.path.join(self.path, 'db')):
                 try:
                     f = int(f)
                 except ValueError:
@@ -250,10 +250,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
         sv = self._storage_version
         sl = self._shard_level
         if sv < 1 or sl <= 1:
-            return "0"
+            return '0'
         if sv == 2:
             if len(key) == 0:  # TODO: should we allow empty key value?
-                return "0"
+                return '0'
             base = blake2b(key, digest_size=1).digest()[0]  # 1 byte, used as int
             if sl == 8:
                 base &= 0b111  # keep the right-most 3 bits, 0 ~ 7
@@ -268,15 +268,15 @@ class Bigdict(MutableMapping, Generic[ValType]):
             elif sl == 256:
                 pass  # keep all 8 bits, 0 ~ 255
             else:
-                raise ValueError(f"shard-level {sl}")
+                raise ValueError(f'shard-level {sl}')
             return str(base)
-        raise ValueError(f"storage-version {sv}")
+        raise ValueError(f'storage-version {sv}')
 
     def _env(self, shard: str, *, readonly=None, **config):
         map_size = self.map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
         if readonly:
             db = lmdb.Environment(
-                os.path.join(self.path, "db", shard),
+                os.path.join(self.path, 'db', shard),
                 create=False,
                 readonly=True,
                 subdir=True,
@@ -285,9 +285,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 **config,
             )
         else:
-            os.makedirs(os.path.join(self.path, "db", shard), exist_ok=True)
+            os.makedirs(os.path.join(self.path, 'db', shard), exist_ok=True)
             db = lmdb.Environment(
-                os.path.join(self.path, "db", shard),
+                os.path.join(self.path, 'db', shard),
                 readonly=False,
                 subdir=True,
                 readahead=False,
@@ -298,20 +298,19 @@ class Bigdict(MutableMapping, Generic[ValType]):
             )
         return db
 
-    def _db(self, shard: str = "0"):
+    def _db(self, shard: str = '0'):
         db = self._dbs.get(shard, None)
         if db is None:
             db = self._env(shard, readonly=self.readonly)
             self._dbs[shard] = db
         return db
 
-    def _transaction(self, shard: str = "0"):
+    def _transaction(self, shard: str = '0'):
         if shard not in self._transactions:
-
             print()
-            print("shard:", shard)
-            print("readonly:", self.readonly)
-            print("db:", self._db(shard))
+            print('shard:', shard)
+            print('readonly:', self.readonly)
+            print('db:', self._db(shard))
 
             txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
             txn.__enter__()  # this does nothing as of `lmdb` version 1.4.1.
@@ -393,7 +392,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         without too frequent commits has very significant performance benefits.
         """
         if self.readonly:
-            raise ReadonlyError("commit: Permission denied")
+            raise ReadonlyError('commit: Permission denied')
 
         if self._num_pending_writes > 0:
             for x in self._transactions.values():
@@ -416,7 +415,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         to be sure all updates (including to `self.info`) are persisted.
         """
         self.commit()
-        json.dump(self.info, open(os.path.join(self.path, "info.json"), "w"))
+        json.dump(self.info, open(os.path.join(self.path, 'info.json'), 'w'))
 
     def encode_key(self, k: KeyType) -> bytes:
         """
@@ -431,10 +430,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
         in its custom :meth:`encode_key` and :meth:`decode_key`.
         """
         # https://death.andgravity.com/stable-hashing#fnref-1
-        return k.encode("utf-8")
+        return k.encode('utf-8')
 
     def decode_key(self, k: bytes) -> KeyType:
-        return k.decode("utf-8")
+        return k.decode('utf-8')
 
     def encode_value(self, v: ValType) -> bytes:
         """
@@ -493,7 +492,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
             raise KeyError(key)
         self._track_write(1)
 
-
     def get(self, key: KeyType, default=None) -> ValType:
         try:
             return self.__getitem__(key)
@@ -502,7 +500,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
     def pop(self, key: KeyType, default=UNSET) -> ValType:
         if self.readonly:
-            raise ReadonlyError("pop: Permission denied")
+            raise ReadonlyError('pop: Permission denied')
 
         k = self.encode_key(key)
         shard = self._shard(k)
@@ -516,7 +514,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
     def setdefault(self, key: KeyType, value: ValType) -> ValType:
         if self.readonly:
-            raise ReadonlyError("setdefault: Permission denied")
+            raise ReadonlyError('setdefault: Permission denied')
 
         try:
             return self[key]
@@ -536,7 +534,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         """
 
         if self.readonly:
-            raise ReadonlyError("update: Permission denied")
+            raise ReadonlyError('update: Permission denied')
 
         sharddata = defaultdict(list)
         encode_key = self.encode_key
@@ -559,7 +557,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 n += len(values)
         self._track_write(n)
 
-
     def keys(self) -> Iterator[KeyType]:
         if not self.readonly:
             self.commit()
@@ -578,7 +575,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 for v in txn.cursor().iternext(keys=False, values=True):
                     yield decoder(v)
 
-
     def items(self) -> Iterator[tuple[KeyType, ValType]]:
         if not self.readonly:
             self.commit()
@@ -588,7 +584,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
             with self._db(shard).begin() as txn:
                 for key, value in txn.cursor().iternext(keys=True, values=True):
                     yield decode_key(key), decode_val(value)
-
 
     def __iter__(self) -> Iterator[KeyType]:
         return self.keys()
@@ -611,7 +606,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         n = 0
         for shard in self._shards():
             stat = self._db(shard).stat()
-            n += stat["entries"]
+            n += stat['entries']
         return n
 
     def __bool__(self) -> bool:
@@ -619,7 +614,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
             self.commit()
         for shard in self._shards():
             stat = self._db(shard).stat()
-            if stat["entries"]:
+            if stat['entries']:
                 return True
         return False
 
@@ -628,7 +623,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         After ``destroy``, disk data is erased and the object is no longer usable.
         """
         if self.readonly:
-            raise ReadonlyError("destroy: Permission denied")
+            raise ReadonlyError('destroy: Permission denied')
 
         for x in self._transactions.values():
             x.abort()
@@ -639,7 +634,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self._dbs.clear()
         shutil.rmtree(self.path, ignore_errors=True)
         try:
-            delattr(self, "info")
+            delattr(self, 'info')
         except AttributeError:
             pass
 
@@ -662,7 +657,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         (now pointing to a new, compact version) can continue to be used.
         """
         if self.readonly:
-            raise ReadonlyError("compact: Permission denied")
+            raise ReadonlyError('compact: Permission denied')
 
         self.flush()
 
@@ -679,8 +674,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return s
 
         for shard in self._shards():
-            shard_new = shard + "-new"
-            path_new = os.path.join(self.path, "db", shard_new)
+            shard_new = shard + '-new'
+            path_new = os.path.join(self.path, 'db', shard_new)
 
             db = self._env(shard)
             os.mkdir(path_new)
@@ -693,12 +688,12 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 db.close()
                 raise
             else:
-                n = db.stat()["entries"]
-                n_new = db_new.stat()["entries"]
+                n = db.stat()['entries']
+                n_new = db_new.stat()['entries']
                 db.close()
                 db_new.close()
                 if n_new == n:
-                    path = os.path.join(self.path, "db", shard)
+                    path = os.path.join(self.path, 'db', shard)
                     size_old += get_folder_size(path)
                     shutil.rmtree(path)
                     os.rename(path_new, path)
