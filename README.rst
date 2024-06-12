@@ -12,8 +12,8 @@ The "engine", or "back-end", is currently ``lmdb``. However, ``lmdb`` is not the
 
 In addition,
 
-- It must use more files for storage as the data size grows, hence keeping file sizes modest,
-  as opposed to a single file growing in size.
+- It must use more files for storage as the data size grows, hence keeping file sizes controllable,
+  as opposed to a single file growing unbounded.
 
 If the chosen backend does not meet this requirement, it's the responsibility of ``bigdict`` to implement that.
 

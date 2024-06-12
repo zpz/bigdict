@@ -12,6 +12,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from hashlib import blake2b
 from typing import Generic, TypeVar
+from multiprocessing.util import Finalize
 
 import lmdb
 
@@ -107,14 +108,11 @@ class Bigdict(MutableMapping, Generic[ValType]):
             https://openldap.org/lists/openldap-technical/201511/msg00101.html
             https://openldap.org/lists/openldap-technical/201511/msg00107.html
 
-            Experiments showed that ``map_size_mb`` is not an intrinsic attribute of the database files.
-            (I did not read about this in documentation, nor do I understand how memory-mapping works.)
-            You are free to choose a ``map_size_mb`` value unrelated to the value used when creating
-            the database files, as long as the value is large enough for your application.
-
             This is not an intrinsic attribute of the database file(s).
-            It seems that you are free to use different values of this in different readers
-            of the same DB. But, to be worry free, it may be a good idea to use the same value.
+            It is fine to use different values in different sessions as long as the value is large enough.
+
+            The default value is intentionally small; the user is recommended to experiment and find the right
+            value for their use case.
         """
         self.path = os.path.abspath(path)
 
@@ -151,6 +149,25 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self._num_pending_writes = 0
         # This is for internal use. Do not modify its value.
 
+        if self.readonly:
+            self.close = lambda: None
+        else:
+            self.close = Finalize(
+                self,
+                type(self)._close,
+                args=(self.path, self.info, self._dbs, self._transactions),
+                exitpriority=10,
+            )
+            # Because `self._dbs`, `self._transactions`, `self.info` are passed to the finalizer this way,
+            # do not re-assign these attributes, like
+            #
+            #   self._transactions = {}
+            #
+            # Instead, if needed, make in-place changes so that the reference `self._transactions` that has been passed to
+            # the finalizer stays valid, like this:
+            #
+            #   self._transactions.clear()
+
     @property
     def readonly(self):
         return self._readonly
@@ -179,44 +196,34 @@ class Bigdict(MutableMapping, Generic[ValType]):
             (type(self), self.path, self.map_size_mb),
         )
 
-    def _close(self):
-        if not hasattr(self, "info"):
-            return  # `destroy` has been called
-        if self.readonly:
-            return
+    @staticmethod
+    def _close(path, info, dbs, transactions):
+        # print('closing')
+        for t in transactions.values():
+            # print('closing transaction', t)
+            t.commit()
+        transactions.clear()
+
+        for d in dbs.values():
+            # print('closing db', d)
+            d.close()
+        dbs.clear()
 
         try:
-            self.flush()
+            json.dump(info, open(os.path.join(path, "info.json"), "w"))
         except FileNotFoundError as e:
             if "/info.json" in str(e):
                 # Could not find the 'info' file or folder;
-                # could happen if this db has been "destroyed" by another client
+                # could happen if this db has been "destroyed".
                 pass
             else:
                 raise
-        except NameError as e:
-            if str(e) == "name 'open' is not defined":
-                # Could happen during interpreter shutdown.
-                pass
-            else:
-                raise
-
-        for x in self._dbs.values():
-            x.close()
-        self._dbs = {}
-
-    def __del__(self):
-        # If not using context manager, then
-        # this tries to flush unsaved changes, but this is not totally reliable.
-        # It is recommended to explicitly `flush` before you leave
-        # after you make any writes, including updates to `info`.
-        self._close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args, **kwargs):
-        self._close()
+        # except NameError as e:
+        #     if str(e) == "name 'open' is not defined":
+        #         # Could happen during interpreter shutdown.
+        #         pass
+        #     else:
+        #         raise
 
     def _shards(self) -> list[str]:
         # Return existing shards.
@@ -300,6 +307,12 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
     def _transaction(self, shard: str = "0"):
         if shard not in self._transactions:
+
+            print()
+            print("shard:", shard)
+            print("readonly:", self.readonly)
+            print("db:", self._db(shard))
+
             txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
             txn.__enter__()  # this does nothing as of `lmdb` version 1.4.1.
             self._transactions[shard] = txn
@@ -390,7 +403,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         # If `self._num_pending_writes == 0`, there can still be
         # transactions created by `__getitem__`, but they did not perform
         # any write.
-        self._transactions = {}
+        self._transactions.clear()
         # if not self.readonly:
         #     for db in self._dbs.values():
         #         db.sync()
@@ -480,6 +493,13 @@ class Bigdict(MutableMapping, Generic[ValType]):
             raise KeyError(key)
         self._track_write(1)
 
+
+    def get(self, key: KeyType, default=None) -> ValType:
+        try:
+            return self.__getitem__(key)
+        except KeyError:
+            return default
+
     def pop(self, key: KeyType, default=UNSET) -> ValType:
         if self.readonly:
             raise ReadonlyError("pop: Permission denied")
@@ -539,11 +559,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 n += len(values)
         self._track_write(n)
 
-    def get(self, key: KeyType, default=None) -> ValType:
-        try:
-            return self.__getitem__(key)
-        except KeyError:
-            return default
 
     def keys(self) -> Iterator[KeyType]:
         if not self.readonly:
@@ -563,8 +578,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 for v in txn.cursor().iternext(keys=False, values=True):
                     yield decoder(v)
 
-    def __iter__(self) -> Iterator[KeyType]:
-        return self.keys()
 
     def items(self) -> Iterator[tuple[KeyType, ValType]]:
         if not self.readonly:
@@ -575,6 +588,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
             with self._db(shard).begin() as txn:
                 for key, value in txn.cursor().iternext(keys=True, values=True):
                     yield decode_key(key), decode_val(value)
+
+
+    def __iter__(self) -> Iterator[KeyType]:
+        return self.keys()
 
     def __contains__(self, key: KeyType) -> bool:
         try:
@@ -615,11 +632,11 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         for x in self._transactions.values():
             x.abort()
-        self._transactions = {}
+        self._transactions.clear()
         self._num_pending_writes = 0
         for x in self._dbs.values():
             x.close()
-        self._dbs = {}
+        self._dbs.clear()
         shutil.rmtree(self.path, ignore_errors=True)
         try:
             delattr(self, "info")
@@ -651,7 +668,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         for x in self._dbs.values():
             x.close()
-        self._dbs = {}
+        self._dbs.clear()
         size_old = 0  # bytes
         size_new = 0  # bytes
 
