@@ -1,6 +1,11 @@
 # Changelog
 
 
+## [0.3.3] - 2024-06-13
+
+- `get_buffer` commits in a read/write object if needed, so that user does not need to remember to commit after writes and before calling it.
+
+
 ## [0.3.2] - 2024-06-13
 
 - Fixed/improved `__len__` and `__bool__`.

@@ -516,10 +516,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
         If you ever use this method, usually you're using a subclass whose methods
         :meth:`encode_value` and :meth:`decode_value` are both pass-throughs, and
         the values are `bytes`.
-
-        NOTE: if you use this method on a read/write object, you
-        should call `commit` after writing and before calling this method.
         """
+        if self._num_pending_writes > 0:
+            self.commit()
+
         k = self.encode_key(key)
         shard = self._shard(k)
         try:
@@ -610,7 +610,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         `self.readonly` may be either True or False.
         """
-        if not self.readonly:
+        if self._num_pending_writes > 0:
             self.commit()
         for shard in self._shards():
             with self._db(shard).begin(buffers=buffers) as txn:
@@ -631,7 +631,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         `self.readonly` may be either True or False.
         """
-        if not self.readonly:
+        if self._num_pending_writes > 0:
             self.commit()
         for shard in self._shards():
             with self._db(shard).begin(buffers=buffers) as txn:
