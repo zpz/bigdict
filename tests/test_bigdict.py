@@ -294,7 +294,6 @@ def test_buffers():
     db = BufferDict.new()
     db['a'] = b'abc'
     db['b'] = b'defg'
-    db.commit()
 
     z = db.get_buffer('a')
     assert isinstance(z, memoryview)
