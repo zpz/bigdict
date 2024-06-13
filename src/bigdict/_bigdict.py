@@ -143,30 +143,27 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self._dbs = {}
         self._transactions = {}
 
-        self._write_commit_interval = 1_000_000
-        # You may change this value any time.
+        self._write_commit_interval = 100_000
+        # You may change this value during the lifetime of the object.
 
         self._num_pending_writes = 0
         # This is for internal use. Do not modify its value.
 
-        if self.readonly:
-            self.close = lambda: None
-        else:
-            self.close = Finalize(
-                self,
-                type(self)._close,
-                args=(self.path, self.info, self._dbs, self._transactions),
-                exitpriority=10,
-            )
-            # Because `self._dbs`, `self._transactions`, `self.info` are passed to the finalizer this way,
-            # do not re-assign these attributes, like
-            #
-            #   self._transactions = {}
-            #
-            # Instead, if needed, make in-place changes so that the reference `self._transactions` that has been passed to
-            # the finalizer stays valid, like this:
-            #
-            #   self._transactions.clear()
+        self.close = Finalize(
+            self,
+            type(self)._close,
+            args=(self.path, self.info, self._dbs, self._transactions, self.readonly),
+            exitpriority=10,
+        )
+        # Because `self._dbs`, `self._transactions`, `self.info` are passed to the finalizer this way,
+        # do not re-assign these attributes, like
+        #
+        #   self._transactions = {}
+        #
+        # Instead, if needed, make in-place changes so that the reference `self._transactions` that has been passed to
+        # the finalizer stays valid, like this:
+        #
+        #   self._transactions.clear()
 
     @property
     def readonly(self):
@@ -197,33 +194,34 @@ class Bigdict(MutableMapping, Generic[ValType]):
         )
 
     @staticmethod
-    def _close(path, info, dbs, transactions):
-        # print('closing')
+    def _close(path, info, dbs, transactions, readonly):
         for t in transactions.values():
-            # print('closing transaction', t)
-            t.commit()
+            if readonly:
+                t.abort()
+            else:
+                t.commit()
         transactions.clear()
 
         for d in dbs.values():
-            # print('closing db', d)
             d.close()
         dbs.clear()
 
-        try:
-            json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
-        except FileNotFoundError as e:
-            if '/info.json' in str(e):
-                # Could not find the 'info' file or folder;
-                # could happen if this db has been "destroyed".
-                pass
-            else:
-                raise
-        # except NameError as e:
-        #     if str(e) == "name 'open' is not defined":
-        #         # Could happen during interpreter shutdown.
-        #         pass
-        #     else:
-        #         raise
+        if not readonly:
+            try:
+                json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
+            except FileNotFoundError as e:
+                if '/info.json' in str(e):
+                    # Could not find the 'info' file or folder;
+                    # could happen if this db has been "destroyed".
+                    pass
+                else:
+                    raise
+            # except NameError as e:
+            #     if str(e) == "name 'open' is not defined":
+            #         # Could happen during interpreter shutdown.
+            #         pass
+            #     else:
+            #         raise
 
     def _shards(self) -> list[str]:
         # Return existing shards.
@@ -307,12 +305,20 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
     def _transaction(self, shard: str = '0'):
         if shard not in self._transactions:
-            print()
-            print('shard:', shard)
-            print('readonly:', self.readonly)
-            print('db:', self._db(shard))
-
-            txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
+            try:
+                txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
+            except lmdb.InvalidParameterError as e:
+                if 'mdb_txn_begin: Invalid argument' in str(e):
+                    # This happened in tests where there are two "independent" read/write Bigdict objects
+                    # (pointing to the same path) in two threads, and the other thread has just exited or is exiting
+                    # (hence the object is presumably has just been garbage collected, or is being garbage
+                    # collected). It seems that the other environment is closing (possibly it is touching lock file
+                    # or something), and that interferes with the proper function of this object.
+                    self._dbs[shard].close()
+                    self._dbs[shard] = None
+                    txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
+                else:
+                    raise
             txn.__enter__()  # this does nothing as of `lmdb` version 1.4.1.
             self._transactions[shard] = txn
         return self._transactions[shard]
@@ -394,18 +400,18 @@ class Bigdict(MutableMapping, Generic[ValType]):
         if self.readonly:
             raise ReadonlyError('commit: Permission denied')
 
-        if self._num_pending_writes > 0:
-            for x in self._transactions.values():
-                x.commit()
-            self._num_pending_writes = 0
-
+        for x in self._transactions.values():
+            x.commit()
         # If `self._num_pending_writes == 0`, there can still be
         # transactions created by `__getitem__`, but they did not perform
         # any write.
+
         self._transactions.clear()
         # if not self.readonly:
         #     for db in self._dbs.values():
         #         db.sync()
+
+        self._num_pending_writes = 0
 
     def flush(self) -> None:
         """
@@ -470,6 +476,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
                     # Using a new transaction on each read.
                     # If other objects have written, as long as they have committed,
                     # the changes will be visible to this read.
+                    # If this reuses an existing readonly transaction,
+                    # then this transaction wouldn't see changes made by other
+                    # clients.
             else:
                 v = self._transaction(shard).get(k)
                 # In a read-write env, this will use the existing transaction,
@@ -529,7 +538,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         **kwargs,
     ) -> None:
         """
-        If you write a large number of entries, using :meth:`update` with large batches can have considerable speed gains
+        If you write a large number of entries, using :meth:`update` with large batches (e.g. 1000) can have (slight) speed gains
         compared to using :meth:`__setitem__` to add entries one by one.
         """
 

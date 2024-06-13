@@ -26,7 +26,9 @@ ResultsDict = Dict[int, Dict[str, Dict[str, float]]]
 # Do not continue benchmark if the current
 # step requires more seconds than MAX_TIME
 MAX_TIME = 10
-BATCH_SIZE = 10000
+# BATCH_SIZE = 10000
+BATCH_SIZE = 1000  # the speed gain is not very sensitive to this batch size as long as it's reasonably large
+
 
 
 class BaseBenchmark(ABC):
@@ -199,6 +201,12 @@ class LdbmBenchmark(JsonEncodedBenchmark):
 
 
 class MyBigdict(Bigdict):
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, *args):
+        self.close()
+
     # To be more comparable to LdbmBenchmark
     def encode_key(self, key):
         if isinstance(key, bytes):
@@ -229,13 +237,13 @@ class BigdictBenchmark(JsonEncodedBenchmark):
 
     def open(self):
         if os.path.isdir(self.path):
-            return Bigdict(self.path, readonly=False, map_size_mb=1000)
+            return MyBigdict(self.path, readonly=False, map_size_mb=1000)
         else:
-            return Bigdict.new(self.path, map_size_mb=1000)
+            return MyBigdict.new(self.path, map_size_mb=1000)
     
     def purge(self):
         try:
-            Bigdict(self.path, readonly=False).destroy()
+            MyBigdict(self.path, readonly=False).destroy()
         except FileNotFoundError:
             pass
 
@@ -374,169 +382,166 @@ if __name__ == "__main__":
 
 
 '''
-Printout of one run on 2024-06-11
+Printout of one run on 2024-06-12
+
 
 $ python benchmark.py 
 
-bigdict              write           10            0.00259
-bigdict              batch write     10            0.00137
-bigdict              read            10            0.00164
-bigdict              combined        1100          0.01295
-lmdbm                write           10            0.01574
-lmdbm                batch write     10            0.00246
-lmdbm                read            10            0.00073
-lmdbm                combined        1100          0.21779
+bigdict              write           10            0.00111
+bigdict              batch write     10            0.00139
+bigdict              read            10            0.00261
+bigdict              combined        1100          0.01541
+lmdbm                write           10            0.01519
+lmdbm                batch write     10            0.00220
+lmdbm                read            10            0.00034
+lmdbm                combined        1100          0.17095
 
-bigdict              write           100           0.00944
-bigdict              batch write     100           0.00886
-bigdict              read            100           0.00389
-bigdict              combined        1100          0.01584
-lmdbm                write           100           0.21064
-lmdbm                batch write     100           0.00797
-lmdbm                read            100           0.00616
-lmdbm                combined        1100          0.18130
+bigdict              write           100           0.00489
+bigdict              batch write     100           0.00411
+bigdict              read            100           0.00361
+bigdict              combined        1100          0.01719
+lmdbm                write           100           0.17447
+lmdbm                batch write     100           0.00571
+lmdbm                read            100           0.00423
+lmdbm                combined        1100          0.21392
 
-bigdict              write           1000          0.02115
-bigdict              batch write     1000          0.01319
-bigdict              read            1000          0.00949
-bigdict              combined        1100          0.01134
-lmdbm                write           1000          2.06923
-lmdbm                batch write     1000          0.01867
-lmdbm                read            1000          0.01468
-lmdbm                combined        1100          0.18537
-
-bigdict              write           10000         0.12241
-bigdict              batch write     10000         0.08798
-bigdict              read            10000         0.11064
-bigdict              combined        1100          0.01191
-lmdbm                write           10000        10.00024
-lmdbm                batch write     10000         0.09944
-lmdbm                read            10000         0.13317
-lmdbm                combined        1100          0.18213
-
-bigdict              write           100000        1.26246
-bigdict              batch write     100000        0.92097
-bigdict              read            100000        1.13831
-bigdict              combined        1100          0.01368
-lmdbm                write           100000       10.00226
-lmdbm                batch write     100000        0.83413
-lmdbm                read            100000        1.33657
-lmdbm                combined        1100          0.17077
-
-bigdict              write           1000000      10.00649
-bigdict              batch write     1000000       8.29829
-bigdict              read            1000000      10.01007
-bigdict              combined        1100          0.01826
-lmdbm                write           1000000      10.00180
-lmdbm                batch write     1000000       8.15520
-lmdbm                read            1000000      10.00381
-lmdbm                combined        1100          0.19153
-
-bigdict              write           10            0.00171
-bigdict              batch write     10            0.00166
-bigdict              read            10            0.00205
-bigdict              combined        1100          0.00949
-lmdbm                write           10            0.01447
-lmdbm                batch write     10            0.00184
-lmdbm                read            10            0.00049
-lmdbm                combined        1100          0.18549
-
-bigdict              write           100           0.00458
-bigdict              batch write     100           0.00393
-bigdict              read            100           0.00267
-bigdict              combined        1100          0.01455
-lmdbm                write           100           0.17768
-lmdbm                batch write     100           0.00502
-lmdbm                read            100           0.00326
-lmdbm                combined        1100          0.22201
-
-bigdict              write           1000          0.02310
-bigdict              batch write     1000          0.00879
-bigdict              read            1000          0.00898
-bigdict              combined        1100          0.01158
-lmdbm                write           1000          1.93502
-lmdbm                batch write     1000          0.02409
+bigdict              write           1000          0.02298
+bigdict              batch write     1000          0.00972
+bigdict              read            1000          0.01229
+bigdict              combined        1100          0.01342
+lmdbm                write           1000          1.98285
+lmdbm                batch write     1000          0.02673
 lmdbm                read            1000          0.01462
-lmdbm                combined        1100          0.19909
+lmdbm                combined        1100          0.22254
 
-bigdict              write           10000         0.12006
-bigdict              batch write     10000         0.08369
-bigdict              read            10000         0.10699
-bigdict              combined        1100          0.01094
-lmdbm                write           10000        10.00131
-lmdbm                batch write     10000         0.09939
-lmdbm                read            10000         0.12729
-lmdbm                combined        1100          0.22036
+bigdict              write           10000         0.12249
+bigdict              batch write     10000         0.08896
+bigdict              read            10000         0.13044
+bigdict              combined        1100          0.01342
+lmdbm                write           10000        10.00091
+lmdbm                batch write     10000         0.10959
+lmdbm                read            10000         0.12810
+lmdbm                combined        1100          0.22391
 
-bigdict              write           100000        1.15446
-bigdict              batch write     100000        0.84001
-bigdict              read            100000        1.09984
-bigdict              combined        1100          0.01300
-lmdbm                write           100000       10.00044
-lmdbm                batch write     100000        0.83294
-lmdbm                read            100000        1.32721
-lmdbm                combined        1100          0.16935
+bigdict              write           100000        1.17010
+bigdict              batch write     100000        0.89503
+bigdict              read            100000        1.35896
+bigdict              combined        1100          0.01391
+lmdbm                write           100000       10.00036
+lmdbm                batch write     100000        0.96608
+lmdbm                read            100000        1.29228
+lmdbm                combined        1100          0.16843
 
-bigdict              write           1000000      10.00598
-bigdict              batch write     1000000       8.27619
-bigdict              read            1000000      10.01036
-bigdict              combined        1100          0.01108
-lmdbm                write           1000000      10.00137
-lmdbm                batch write     1000000       8.01160
-lmdbm                read            1000000      10.00307
-lmdbm                combined        1100          0.18077
+bigdict              write           1000000      10.00460
+bigdict              batch write     1000000       9.00816
+bigdict              read            1000000      10.00805
+bigdict              combined        1100          0.01634
+lmdbm                write           1000000      10.00080
+lmdbm                batch write     1000000      10.00143
 
-bigdict              write           10            0.00177
-bigdict              batch write     10            0.00132
-bigdict              read            10            0.00066
-bigdict              combined        1100          0.01310
-lmdbm                write           10            0.01550
-lmdbm                batch write     10            0.00210
-lmdbm                read            10            0.00055
-lmdbm                combined        1100          0.19435
+bigdict              write           10            0.00143
+bigdict              batch write     10            0.00269
+bigdict              read            10            0.00114
+bigdict              combined        1100          0.01327
+lmdbm                write           10            0.01820
+lmdbm                batch write     10            0.00206
+lmdbm                read            10            0.00031
+lmdbm                combined        1100          0.23209
 
-bigdict              write           100           0.00535
-bigdict              batch write     100           0.00320
-bigdict              read            100           0.00212
-bigdict              combined        1100          0.01270
-lmdbm                write           100           0.17157
-lmdbm                batch write     100           0.00514
-lmdbm                read            100           0.00346
-lmdbm                combined        1100          0.20485
+bigdict              write           100           0.00508
+bigdict              batch write     100           0.00260
+bigdict              read            100           0.00251
+bigdict              combined        1100          0.01303
+lmdbm                write           100           0.19923
+lmdbm                batch write     100           0.00637
+lmdbm                read            100           0.00518
+lmdbm                combined        1100          0.19815
 
-bigdict              write           1000          0.02266
-bigdict              batch write     1000          0.00960
-bigdict              read            1000          0.01374
-bigdict              combined        1100          0.01068
-lmdbm                write           1000          1.84641
-lmdbm                batch write     1000          0.02657
-lmdbm                read            1000          0.01394
-lmdbm                combined        1100          0.17697
+bigdict              write           1000          0.02801
+bigdict              batch write     1000          0.00958
+bigdict              read            1000          0.01316
+bigdict              combined        1100          0.01381
+lmdbm                write           1000          2.21595
+lmdbm                batch write     1000          0.02330
+lmdbm                read            1000          0.01832
+lmdbm                combined        1100          0.21415
 
-bigdict              write           10000         0.12552
-bigdict              batch write     10000         0.08131
-bigdict              read            10000         0.10702
-bigdict              combined        1100          0.01088
-lmdbm                write           10000        10.00138
-lmdbm                batch write     10000         0.09720
-lmdbm                read            10000         0.12346
-lmdbm                combined        1100          0.17387
+bigdict              write           10000         0.14018
+bigdict              batch write     10000         0.10308
+bigdict              read            10000         0.13387
+bigdict              combined        1100          0.01628
+lmdbm                write           10000        10.00172
+lmdbm                batch write     10000         0.10502
+lmdbm                read            10000         0.12950
+lmdbm                combined        1100          0.18172
 
-bigdict              write           100000        1.18787
-bigdict              batch write     100000        0.84368
-bigdict              read            100000        1.07966
-bigdict              combined        1100          0.01139
-lmdbm                write           100000       10.00262
-lmdbm                batch write     100000        0.80398
-lmdbm                read            100000        1.22542
-lmdbm                combined        1100          0.20726
+bigdict              write           100000        1.20549
+bigdict              batch write     100000        1.16667
+bigdict              read            100000        1.38001
+bigdict              combined        1100          0.01380
+lmdbm                write           100000       10.00107
+lmdbm                batch write     100000        1.09726
+lmdbm                read            100000        1.53972
+lmdbm                combined        1100          0.17792
 
-bigdict              write           1000000      10.00619
-bigdict              batch write     1000000       8.56119
-bigdict              read            1000000      10.00991
-bigdict              combined        1100          0.01091
-lmdbm                write           1000000      10.00136
-lmdbm                batch write     1000000       7.92508
-lmdbm                read            1000000      10.00378
-lmdbm                combined        1100          0.19889
+bigdict              write           1000000      10.00386
+bigdict              batch write     1000000       9.10241
+bigdict              read            1000000      10.00773
+bigdict              combined        1100          0.01429
+lmdbm                write           1000000      10.00121
+lmdbm                batch write     1000000      10.00217
+
+bigdict              write           10            0.00146
+bigdict              batch write     10            0.00195
+bigdict              read            10            0.00069
+bigdict              combined        1100          0.01365
+lmdbm                write           10            0.01537
+lmdbm                batch write     10            0.00216
+lmdbm                read            10            0.00056
+lmdbm                combined        1100          0.21139
+
+bigdict              write           100           0.00596
+bigdict              batch write     100           0.00529
+bigdict              read            100           0.00267
+bigdict              combined        1100          0.01484
+lmdbm                write           100           0.17925
+lmdbm                batch write     100           0.00569
+lmdbm                read            100           0.00507
+lmdbm                combined        1100          0.22864
+
+bigdict              write           1000          0.02132
+bigdict              batch write     1000          0.01195
+bigdict              read            1000          0.01108
+bigdict              combined        1100          0.01369
+lmdbm                write           1000          1.89918
+lmdbm                batch write     1000          0.02571
+lmdbm                read            1000          0.01625
+lmdbm                combined        1100          0.16864
+
+bigdict              write           10000         0.13405
+bigdict              batch write     10000         0.08617
+bigdict              read            10000         0.12783
+bigdict              combined        1100          0.01559
+lmdbm                write           10000        10.00167
+lmdbm                batch write     10000         0.11594
+lmdbm                read            10000         0.13295
+lmdbm                combined        1100          0.19025
+
+bigdict              write           100000        1.12400
+bigdict              batch write     100000        0.85726
+bigdict              read            100000        1.35902
+bigdict              combined        1100          0.01511
+lmdbm                write           100000       10.00161
+lmdbm                batch write     100000        1.02139
+lmdbm                read            100000        1.30645
+lmdbm                combined        1100          0.17209
+
+bigdict              write           1000000      10.00473
+bigdict              batch write     1000000       8.24678
+bigdict              read            1000000      10.00765
+bigdict              combined        1100          0.01396
+lmdbm                write           1000000      10.00123
+lmdbm                batch write     1000000       9.58374
+lmdbm                read            1000000      10.00463
+lmdbm                combined        1100          0.19597
 '''

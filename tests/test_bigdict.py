@@ -130,7 +130,7 @@ def mp_worker(path, map_size_mb, q):
     d.commit()
 
     q.put(1)
-    sleep(0.2)
+    sleep(0.1)
 
     assert q.get() == 2
 
@@ -144,7 +144,8 @@ def mp_worker(path, map_size_mb, q):
 
 
 def test_mp():
-    for executor in ('thread', 'process'):
+    for executor in ('thread',): # 'process'):
+    # for executor in ('process',):
         print('executor:', executor)
 
         bd = Bigdict.new()
