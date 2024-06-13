@@ -287,10 +287,9 @@ def test_buffers():
     class BufferDict(Bigdict):
         def encode_value(self, x):
             return x
-        
+
         def decode_value(self, x):
             return x
-        
 
     db = BufferDict.new()
     db['a'] = b'abc'
@@ -345,5 +344,3 @@ def test_buffers():
     assert isinstance(v, memoryview)
     assert bytes(k) == b'b'
     assert bytes(v) == b'defg'
-
-

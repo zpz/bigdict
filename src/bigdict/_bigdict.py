@@ -414,7 +414,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
         #         db.sync()
         # I have not encountered a case where `sync` is needed.
 
-
     def flush(self) -> None:
         """
         ``flush`` commits all writes (set/update/delete), and saves ``self.info``.
@@ -510,17 +509,17 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return default
 
     def get_buffer(self, key: KeyType, default=NOTSET) -> memoryview:
-        '''
+        """
         This returns the value as a zero-copy memoryview. Make sure you do not
         modify the content of the memoryview.
 
         If you ever use this method, usually you're using a subclass whose methods
         :meth:`encode_value` and :meth:`decode_value` are both pass-throughs, and
-        the values are `bytes`. 
+        the values are `bytes`.
 
         NOTE: if you use this method on a read/write object, you
         should call `commit` after writing and before calling this method.
-        '''
+        """
         k = self.encode_key(key)
         shard = self._shard(k)
         try:
@@ -593,7 +592,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 n += len(values)
         self._track_write(n)
 
-
     def keys(self) -> Iterator[KeyType]:
         if not self.readonly:
             self.commit()
@@ -604,14 +602,14 @@ class Bigdict(MutableMapping, Generic[ValType]):
                     yield decoder(k)
 
     def values(self, *, buffers: bool = False) -> Iterator[ValType]:
-        '''
+        """
         If `buffers` is `True`, then the yielded values
         are zero-copy memoryview objects. If you ever use this, typically you
         directly use bytes for values, and have made the methods
         `encode_value` and `decode_value` pass-throughs in your subclass.
 
         `self.readonly` may be either True or False.
-        '''
+        """
         if not self.readonly:
             self.commit()
         for shard in self._shards():
@@ -625,14 +623,14 @@ class Bigdict(MutableMapping, Generic[ValType]):
                         yield decoder(v)
 
     def items(self, *, buffers: bool = False) -> Iterator[tuple[KeyType, ValType]]:
-        '''
+        """
         If `buffers` is `True`, then the yielded keys and values
         are zero-copy memoryview objects. If you ever use this, typically
         you directly use bytes for keys and values, and have made the methods
         `encode_key`, `decode_key`, `encode_value`, `decode_value` all pass-throughs in your subclass.
 
         `self.readonly` may be either True or False.
-        '''
+        """
         if not self.readonly:
             self.commit()
         for shard in self._shards():
@@ -663,7 +661,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         for shard in self._shards():
             if self.readonly:
                 with self._db(shard).begin() as txn:
-                    n += txn.stat()['entries']        
+                    n += txn.stat()['entries']
             else:
                 n += self._transaction(shard).stat()['entries']
         return n
