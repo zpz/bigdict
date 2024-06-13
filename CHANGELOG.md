@@ -1,6 +1,11 @@
 # Changelog
 
 
+## [0.3.1] - 2024-06-12
+
+- Removed context manager; use multiprocessing.util.Finalize instead.
+
+
 ## [0.3.0] - 2024-06-11
 
 Significant refactor with simplifications, corrections, and enhancements.
