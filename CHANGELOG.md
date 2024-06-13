@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [0.3.2] - 2024-06-13
+
+- Fixed/improved `__len__` and `__bool__`.
+- New method `get_buffer`.
+- New parameter `buffers` to methods `values` and `items`.
+
+
 ## [0.3.1] - 2024-06-12
 
 - Removed context manager; use multiprocessing.util.Finalize instead.

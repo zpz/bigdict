@@ -16,7 +16,7 @@ from typing import Generic, TypeVar
 
 import lmdb
 
-UNSET = object()
+NOTSET = object()
 
 KeyType = str
 ValType = TypeVar('ValType')
@@ -406,12 +406,13 @@ class Bigdict(MutableMapping, Generic[ValType]):
         # transactions created by `__getitem__`, but they did not perform
         # any write.
 
+        self._num_pending_writes = 0
+
         self._transactions.clear()
         # if not self.readonly:
         #     for db in self._dbs.values():
         #         db.sync()
-
-        self._num_pending_writes = 0
+        # I have not encountered a case where `sync` is needed.
 
     def flush(self) -> None:
         """
@@ -507,7 +508,32 @@ class Bigdict(MutableMapping, Generic[ValType]):
         except KeyError:
             return default
 
-    def pop(self, key: KeyType, default=UNSET) -> ValType:
+    def get_buffer(self, key: KeyType, default=NOTSET) -> memoryview:
+        """
+        This returns the value as a zero-copy memoryview. Make sure you do not
+        modify the content of the memoryview.
+
+        If you ever use this method, usually you're using a subclass whose methods
+        :meth:`encode_value` and :meth:`decode_value` are both pass-throughs, and
+        the values are `bytes`.
+
+        NOTE: if you use this method on a read/write object, you
+        should call `commit` after writing and before calling this method.
+        """
+        k = self.encode_key(key)
+        shard = self._shard(k)
+        try:
+            with self._db(shard).begin(buffers=True) as txn:
+                v = txn.get(k)
+        except lmdb.PageNoteFoundError:
+            raise KeyError(key)
+        if v is None:
+            if default is NOTSET:
+                raise KeyError(key)
+            return default
+        return v
+
+    def pop(self, key: KeyType, default=NOTSET) -> ValType:
         if self.readonly:
             raise ReadonlyError('pop: Permission denied')
 
@@ -515,7 +541,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         shard = self._shard(k)
         v = self._transaction(shard).pop(k)
         if v is None:
-            if default is UNSET:
+            if default is NOTSET:
                 raise KeyError(key)
             return default
         self._track_write(1)
@@ -575,24 +601,48 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 for k in txn.cursor().iternext(keys=True, values=False):
                     yield decoder(k)
 
-    def values(self) -> Iterator[ValType]:
-        if not self.readonly:
-            self.commit()
-        decoder = self.decode_value
-        for shard in self._shards():
-            with self._db(shard).begin() as txn:
-                for v in txn.cursor().iternext(keys=False, values=True):
-                    yield decoder(v)
+    def values(self, *, buffers: bool = False) -> Iterator[ValType]:
+        """
+        If `buffers` is `True`, then the yielded values
+        are zero-copy memoryview objects. If you ever use this, typically you
+        directly use bytes for values, and have made the methods
+        `encode_value` and `decode_value` pass-throughs in your subclass.
 
-    def items(self) -> Iterator[tuple[KeyType, ValType]]:
+        `self.readonly` may be either True or False.
+        """
         if not self.readonly:
             self.commit()
-        decode_key = self.decode_key
-        decode_val = self.decode_value
         for shard in self._shards():
-            with self._db(shard).begin() as txn:
-                for key, value in txn.cursor().iternext(keys=True, values=True):
-                    yield decode_key(key), decode_val(value)
+            with self._db(shard).begin(buffers=buffers) as txn:
+                if buffers:
+                    for v in txn.cursor().iternext(keys=False, values=True):
+                        yield v
+                else:
+                    decoder = self.decode_value
+                    for v in txn.cursor().iternext(keys=False, values=True):
+                        yield decoder(v)
+
+    def items(self, *, buffers: bool = False) -> Iterator[tuple[KeyType, ValType]]:
+        """
+        If `buffers` is `True`, then the yielded keys and values
+        are zero-copy memoryview objects. If you ever use this, typically
+        you directly use bytes for keys and values, and have made the methods
+        `encode_key`, `decode_key`, `encode_value`, `decode_value` all pass-throughs in your subclass.
+
+        `self.readonly` may be either True or False.
+        """
+        if not self.readonly:
+            self.commit()
+        for shard in self._shards():
+            with self._db(shard).begin(buffers=buffers) as txn:
+                if buffers:
+                    for key, value in txn.cursor().iternext(keys=True, values=True):
+                        yield key, value
+                else:
+                    decode_key = self.decode_key
+                    decode_val = self.decode_value
+                    for key, value in txn.cursor().iternext(keys=True, values=True):
+                        yield decode_key(key), decode_val(value)
 
     def __iter__(self) -> Iterator[KeyType]:
         return self.keys()
@@ -605,27 +655,44 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return False
 
     def __len__(self) -> int:
-        if not self.readonly:
-            self.commit()
-        # If there are recent writes in the same object, they may not be counted
-        # w/o commit.
-        # TODO:
-        # we could track count changes in a writer w/o `commit`.
-
+        # If `self.readonly` is True, this is correct as long as other writers have committed their writes.
+        # If `self.readonly` is False, this is correct after this object's writings w/o the need for explicit commit.
         n = 0
         for shard in self._shards():
-            stat = self._db(shard).stat()
-            n += stat['entries']
+            if self.readonly:
+                with self._db(shard).begin() as txn:
+                    n += txn.stat()['entries']
+            else:
+                n += self._transaction(shard).stat()['entries']
         return n
 
     def __bool__(self) -> bool:
-        if not self.readonly:
-            self.commit()
+        # Similar to :meth:`__len__`.
         for shard in self._shards():
-            stat = self._db(shard).stat()
-            if stat['entries']:
-                return True
+            if self.readonly:
+                with self._db(shard).begin() as txn:
+                    if txn.stat()['entries']:
+                        return True
+            else:
+                if self._transaction(shard).stat()['entries']:
+                    return True
         return False
+
+    def clear(self):
+        # if self.readonly:
+        #     raise ReadonlyError('clear: Permission denied')
+        # for shard in self._shards():
+        #     self._transaction(shard).drop(db=b'', delete=True)
+        #     del self._transactions[shard]
+        #     self._db(shard).close()
+        #     del self._dbs[shard]
+        # for t in self._transactions.values():
+        #     t.drop(db=b'', delete=True)
+        #     self._db(shard).close()
+        #     del self._dbs[shard]
+        # self._transactions.clear()
+        # self._dbs.clear()
+        raise NotImplementedError
 
     def destroy(self) -> None:
         """

@@ -23,6 +23,7 @@ def test_basics():
     uid = str(uuid4())
     bd['uid'] = uid
 
+    assert bd
     assert bd['a'] == 3
     assert bd.setdefault('a', 4) == 3
     assert bd.setdefault('c', 4) == 4
@@ -48,15 +49,22 @@ def test_basics():
 
     assert bd.pop('a') == 'a'
     assert 'a' not in bd
+    assert len(bd) == 4
 
     bd2 = Bigdict(bd.path, map_size_mb=32, readonly=True)
     # apparently `map_size` is not an attribute of the database file---you
     # can choose another `map_size` when reading.
 
+    bd.commit()
+
+    assert bd2
+
     assert bd2['c'] == 4
     assert bd2['9'] == [1, 2, 'a']
     assert bd2['b'] == {'a': 3, 'b': 4}
     assert bd2['uid'] == uid
+
+    assert len(bd2) == 4
 
     del bd['c']
     assert 'c' not in bd
@@ -64,11 +72,14 @@ def test_basics():
     # Before `bd` commit, the other reader does not see the change.
     assert bd2['c'] == 4
     assert 'c' in bd2
+    assert len(bd2) == 4
 
     bd.commit()
     # After writer commit, the other reader sees the changes.
     with pytest.raises(KeyError):
         assert bd2['c'] == 4
+
+    assert len(bd2) == 3
 
     with pytest.raises(KeyError):
         del bd['99']
@@ -270,3 +281,66 @@ def test_shard():
     assert sorted(data) == sorted(db3.values())
 
     db.destroy()
+
+
+def test_buffers():
+    class BufferDict(Bigdict):
+        def encode_value(self, x):
+            return x
+
+        def decode_value(self, x):
+            return x
+
+    db = BufferDict.new()
+    db['a'] = b'abc'
+    db['b'] = b'defg'
+    db.commit()
+
+    z = db.get_buffer('a')
+    assert isinstance(z, memoryview)
+    assert len(z) == 3
+    assert z[0] == ord('a')
+    assert bytes(z[1:2]) == b'b'
+    assert bytes(z) == b'abc'
+
+    z = db.get_buffer('b')
+    assert isinstance(z, memoryview)
+    assert len(z) == 4
+    assert z[0] == ord('d')
+    assert bytes(z[2:3]) == b'f'
+    assert bytes(z) == b'defg'
+
+    z = db.get_buffer('c', None)
+    assert z is None
+    with pytest.raises(KeyError):
+        z = db.get_buffer('c')
+
+    assert list(db.keys()) == ['a', 'b']
+
+    vv = db.values()
+    z = next(vv)
+    assert isinstance(z, bytes)
+    assert z == b'abc'
+    z = next(vv)
+    assert isinstance(z, bytes)
+    assert z == b'defg'
+
+    vv = db.values(buffers=True)
+    z = next(vv)
+    assert isinstance(z, memoryview)
+    assert bytes(z) == b'abc'
+    z = next(vv)
+    assert isinstance(z, memoryview)
+    assert bytes(z) == b'defg'
+
+    zz = db.items(buffers=True)
+    k, v = next(zz)
+    assert isinstance(k, memoryview)
+    assert isinstance(v, memoryview)
+    assert bytes(k) == b'a'
+    assert bytes(v) == b'abc'
+    k, v = next(zz)
+    assert isinstance(k, memoryview)
+    assert isinstance(v, memoryview)
+    assert bytes(k) == b'b'
+    assert bytes(v) == b'defg'
