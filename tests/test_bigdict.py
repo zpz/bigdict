@@ -144,8 +144,8 @@ def mp_worker(path, map_size_mb, q):
 
 
 def test_mp():
-    for executor in ('thread',): # 'process'):
-    # for executor in ('process',):
+    for executor in ('thread',):  # 'process'):
+        # for executor in ('process',):
         print('executor:', executor)
 
         bd = Bigdict.new()
