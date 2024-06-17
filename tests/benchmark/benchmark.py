@@ -34,12 +34,14 @@ BATCH_SIZE = 1000  # the speed gain is not very sensitive to this batch size as 
 class BaseBenchmark(ABC):
     def __init__(self, db_tpl, db_type):
         self.available = True
-        self.batch_available = True
+        self.batch_write_available = True
+        self.batch_read_available = False
         self.path = db_tpl.format(db_type)
         self.name = db_type
         self.write = -1
-        self.batch = -1
+        self.batch_write = -1
         self.read = -1
+        self.batch_read = -1
         self.combined = -1
 
     @abstractmethod
@@ -80,7 +82,7 @@ class BaseBenchmark(ABC):
             self.write = t.get()
         self.print_time("write", N, t)
 
-    def measure_batch(self, N: int) -> None:
+    def measure_batch_writes(self, N: int) -> None:
         with MeasureTime() as t, self.open() as db:
             for pairs in batch(self.generate_data(N), BATCH_SIZE):
                 if t.get() > MAX_TIME:
@@ -88,7 +90,7 @@ class BaseBenchmark(ABC):
                 db.update({key: self.encode(value) for key, value in pairs})
                 self.commit()
         if t.get() < MAX_TIME:
-            self.batch = t.get()
+            self.batch_write = t.get()
         self.print_time("batch write", N, t)
 
     def measure_reads(self, N: int) -> None:
@@ -100,6 +102,16 @@ class BaseBenchmark(ABC):
         if t.get() < MAX_TIME:
             self.read = t.get()
         self.print_time("read", N, t)
+
+    def measure_batch_reads(self, N: int) -> None:
+        with MeasureTime() as t, self.open() as db:
+            for keys in batch(self.random_keys(N, N), BATCH_SIZE):
+                if t.get() > MAX_TIME:
+                    break
+                _ = [self.decode(v) for k, v in db.stream_get(keys)]
+        if t.get() < MAX_TIME:
+            self.batch_read = t.get()
+        self.print_time("batch read", N, t)
 
     def measure_combined(self, read=1, write=10, repeat=100) -> None:
         with MeasureTime() as t, self.open() as db:
@@ -116,7 +128,7 @@ class BaseBenchmark(ABC):
         self.print_time("combined", (read + write) * repeat, t)
 
     def database_is_built(self):
-        return self.batch >= 0 or self.write >= 0
+        return self.batch_write >= 0 or self.write >= 0
 
     def print_time(self, measure_type, numbers, t):
         print(f"{self.name:<20s} {measure_type:<15s} {str(numbers):<10s} {t.get():10.5f}")
@@ -234,6 +246,7 @@ class MyBigdict(Bigdict):
 class BigdictBenchmark(JsonEncodedBenchmark):
     def __init__(self, db_tpl):
         super().__init__(db_tpl, 'bigdict')
+        self.batch_read_available = True
 
     def open(self):
         if os.path.isdir(self.path):
@@ -264,18 +277,21 @@ def run_bench(N, db_tpl) -> Dict[str, Dict[str, float]]:
             continue
         benchmark.purge()
         benchmark.measure_writes(N)
-        if benchmark.batch_available:
+        if benchmark.batch_write_available:
             benchmark.purge()
-            benchmark.measure_batch(N)
+            benchmark.measure_batch_writes(N)
         if benchmark.database_is_built():
             benchmark.measure_reads(N)
+            if benchmark.batch_read_available:
+                benchmark.measure_batch_reads(N)
             benchmark.measure_combined(read=1, write=10, repeat=100)
 
     ret: DefaultDict[str, Dict[str, float]] = defaultdict(dict)
     for benchmark in benchmarks:
         ret[benchmark.name]["read"] = benchmark.read
+        ret[benchmark.name]["batch_read"] = benchmark.batch_read
         ret[benchmark.name]["write"] = benchmark.write
-        ret[benchmark.name]["batch"] = benchmark.batch
+        ret[benchmark.name]["batch_write"] = benchmark.batch_write
         ret[benchmark.name]["combined"] = benchmark.combined
 
     return ret
@@ -376,8 +392,9 @@ if __name__ == "__main__":
 
     with open(args.outfile, "w", encoding="utf-8") as fw:
         write_markdown_table(fw, best_results, "write")
-        write_markdown_table(fw, best_results, "batch")
+        write_markdown_table(fw, best_results, "batch_write")
         write_markdown_table(fw, best_results, "read")
+        write_markdown_table(fw, best_results, "batch_read")
         write_markdown_table(fw, best_results, "combined")
 
 

@@ -533,6 +533,32 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return default
         return v
 
+    # def stream_get(self, keys: Iterable[KeyType], default=NOTSET, *, buffers: bool = False) -> Iterable:
+    #     if self._shard_level > 1:
+    #         raise NotImplementedError
+
+    #     if self._num_pending_writes > 0:
+    #         self.commit()
+    #     encode_key = self.encode_key
+    #     decode_value = self.decode_value
+
+    #     with self._db('0').begin(buffers=buffers) as txn:
+    #         with txn.cursor() as cursor:
+    #             for k, v in cursor.getmulti((encode_key(k) for k in keys)):
+    #                 if v is None:
+    #                     if default is NOTSET:
+    #                         raise KeyError(k)
+    #                     v = default
+    #                 else:
+    #                     if not buffers:
+    #                         v = decode_value(v)
+    #                 yield k, v
+    #
+    # Benchmark showed a potential speed gain of up to 30%.
+    # However, I have not verified wether `cursor.getmulti` respects the input order,
+    # and I have not worked on the multi-shard case.
+    # Since read is already quite fast, this optimization may not be that worthwhile.
+
     def pop(self, key: KeyType, default=NOTSET) -> ValType:
         if self.readonly:
             raise ReadonlyError('pop: Permission denied')
