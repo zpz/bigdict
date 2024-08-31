@@ -27,6 +27,8 @@ ReadonlyError = lmdb.ReadonlyError
 
 # TODO: `Generic[KeyType, ValType]`
 # seems to require a newer Python version.
+# However, this implementation has fixed KeyType to str, hence
+# using a single type parameter is more correct.
 class Bigdict(MutableMapping, Generic[ValType]):
     """
     In many use cases, writing and reading are well separated.
@@ -166,17 +168,17 @@ class Bigdict(MutableMapping, Generic[ValType]):
         #   self._transactions.clear()
 
     @property
-    def readonly(self):
+    def readonly(self) -> bool:
         return self._readonly
 
     @property
-    def map_size_mb(self):
+    def map_size_mb(self) -> int:
         return self._map_size_mb
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.__class__.__name__}('{self.path}')"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.__repr__()
 
     @staticmethod
@@ -195,7 +197,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
     @staticmethod
     def _close(path, info, dbs, transactions, readonly):
+        print('finalizing...')
         for t in transactions.values():
+            print('transaction', t)
             if readonly:
                 t.abort()
             else:
@@ -203,6 +207,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         transactions.clear()
 
         for d in dbs.values():
+            print('db', d)
             d.close()
         dbs.clear()
 
@@ -330,7 +335,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         if self._num_pending_writes >= self._write_commit_interval:
             self.commit()
 
-    def commit(self):
+    def commit(self) -> None:
         """
         Commit and close all pending transactions.
 
@@ -437,6 +442,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
         in its custom :meth:`encode_key` and :meth:`decode_key`.
         """
         # https://death.andgravity.com/stable-hashing#fnref-1
+        # We could use pickle/unpickle so that the key value doesn't have to be str,
+        # but pickle/unpickle take 4 times longer than encode/decode.
         return k.encode('utf-8')
 
     def decode_key(self, k: bytes) -> KeyType:
@@ -458,7 +465,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
     def decode_value(self, v: bytes) -> ValType:
         return pickle.loads(v)
 
-    def __setitem__(self, key: KeyType, value: ValType):
+    def __setitem__(self, key: KeyType, value: ValType) -> None:
         key = self.encode_key(key)
         shard = self._shard(key)
         value = self.encode_value(value)
@@ -573,7 +580,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self._track_write(1)
         return self.decode_value(v)
 
-    def setdefault(self, key: KeyType, value: ValType) -> ValType:
+    def setdefault(self, key: KeyType, value: ValType = None) -> ValType:
         if self.readonly:
             raise ReadonlyError('setdefault: Permission denied')
 
@@ -674,11 +681,19 @@ class Bigdict(MutableMapping, Generic[ValType]):
         return self.keys()
 
     def __contains__(self, key: KeyType) -> bool:
+        # Adapted from `__getitem__` but skip decoding the retrieved value.
+        k = self.encode_key(key)
+        shard = self._shard(k)
+
         try:
-            _ = self.__getitem__(key)
-            return True
-        except KeyError:
+            if self.readonly:
+                with self._db(shard).begin() as txn:
+                    v = txn.get(k)
+            else:
+                v = self._transaction(shard).get(k)
+        except lmdb.PageNotFoundError:
             return False
+        return v is not None
 
     def __len__(self) -> int:
         # If `self.readonly` is True, this is correct as long as other writers have committed their writes.
@@ -704,7 +719,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
                     return True
         return False
 
-    def clear(self):
+    def clear(self) -> None:
         # if self.readonly:
         #     raise ReadonlyError('clear: Permission denied')
         # for shard in self._shards():
