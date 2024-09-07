@@ -200,7 +200,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
     def to_readwrite(self):
         return self.__class__(self.path, map_size_mb=self.map_size_mb, readonly=False)
- 
+
     @staticmethod
     def _close(path, info, dbs, transactions, readonly):
         print('finalizing...')
