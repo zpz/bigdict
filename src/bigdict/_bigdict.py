@@ -195,6 +195,12 @@ class Bigdict(MutableMapping, Generic[ValType]):
             (type(self), self.path, self.map_size_mb),
         )
 
+    def to_readonly(self):
+        return self.__class__(self.path, map_size_mb=self.map_size_mb, readonly=True)
+
+    def to_readwrite(self):
+        return self.__class__(self.path, map_size_mb=self.map_size_mb, readonly=False)
+ 
     @staticmethod
     def _close(path, info, dbs, transactions, readonly):
         print('finalizing...')
@@ -319,8 +325,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
                     # (hence the object is presumably has just been garbage collected, or is being garbage
                     # collected). It seems that the other environment is closing (possibly it is touching lock file
                     # or something), and that interferes with the proper function of this object.
-                    self._dbs[shard].close()
-                    self._dbs[shard] = None
+                    db = self._dbs.pop(shard)
+                    db.close()
                     txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
                 else:
                     raise
@@ -428,6 +434,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
         """
         self.commit()
         json.dump(self.info, open(os.path.join(self.path, 'info.json'), 'w'))
+        for db in self._dbs.values():
+            db.sync()
+            db.close()
+        self._dbs.clear()
 
     def encode_key(self, k: KeyType) -> bytes:
         """

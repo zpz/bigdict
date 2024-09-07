@@ -1,6 +1,12 @@
 # Changelog
 
 
+## [0.3.4] - in progress
+
+- More cleanup in `Bigdict.flush`.
+- New methods `to_readonly` and `to_readwrite`.
+
+
 ## [0.3.3] - 2024-06-13
 
 - `get_buffer` commits in a read/write object if needed, so that user does not need to remember to commit after writes and before calling it.
