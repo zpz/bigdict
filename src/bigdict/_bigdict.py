@@ -195,17 +195,19 @@ class Bigdict(MutableMapping, Generic[ValType]):
             (type(self), self.path, self.map_size_mb),
         )
 
-    def to_readonly(self):
+    def as_readonly(self):
+        if self.readonly:
+            return self
         return self.__class__(self.path, map_size_mb=self.map_size_mb, readonly=True)
 
-    def to_readwrite(self):
+    def as_readwrite(self):
+        if not self.readonly:
+            return self
         return self.__class__(self.path, map_size_mb=self.map_size_mb, readonly=False)
 
     @staticmethod
     def _close(path, info, dbs, transactions, readonly):
-        print('finalizing...')
         for t in transactions.values():
-            print('transaction', t)
             if readonly:
                 t.abort()
             else:
@@ -213,7 +215,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
         transactions.clear()
 
         for d in dbs.values():
-            print('db', d)
             d.close()
         dbs.clear()
 

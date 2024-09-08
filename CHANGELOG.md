@@ -4,7 +4,7 @@
 ## [0.3.4] - in progress
 
 - More cleanup in `Bigdict.flush`.
-- New methods `to_readonly` and `to_readwrite`.
+- New methods `as_readonly` and `as_readwrite`.
 
 
 ## [0.3.3] - 2024-06-13
