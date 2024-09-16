@@ -193,7 +193,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         # One solution is:
         # In thread A, create
         #    db1 = Bigdict(..., readonly=False)
-        # 
+        #
         # then,
         #    db2 = db1.as_readonly()
         #
@@ -697,7 +697,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
             self.commit()
         for shard in self._shards():
             if buffers:
-                with self._db(shard).begin(write=(not self.readonly), buffers=buffers) as txn:
+                with self._db(shard).begin(
+                    write=(not self.readonly), buffers=buffers
+                ) as txn:
                     # TODO: is it possible to modify the yielded mem view? Not tested.
                     for v in txn.cursor().iternext(keys=False, values=True):
                         yield v

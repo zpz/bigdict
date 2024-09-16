@@ -352,7 +352,7 @@ def test_as_readonly():
     db['a'] = 3
     db['b'] = 4
     db.flush()
-    
+
     def _worker(d):
         assert d['a'] == 3
         sleep(0.5)
@@ -380,4 +380,3 @@ def test_as_readonly():
 
     with pytest.raises(ReadonlyError):
         dbr['d'] = 9
-
