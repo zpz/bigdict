@@ -4,7 +4,8 @@
 ## [0.3.4] - in progress
 
 - More cleanup in `Bigdict.flush`.
-- New methods `as_readonly` and `as_readwrite`.
+- New methods `as_readonly`.
+- `map_size_mb` default was increased from 64 to 1024.
 
 
 ## [0.3.3] - 2024-06-13

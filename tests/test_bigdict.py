@@ -267,7 +267,7 @@ def test_shard():
     db.compact()
     print(db._num_pending_writes)
 
-    assert not db._dbs
+    assert not db._dbs['dbs']
     assert not db._transactions
 
     assert sorted(data) == sorted(db)  # calls `db.keys()`
@@ -337,6 +337,7 @@ def test_buffers():
     k, v = next(zz)
     assert isinstance(k, memoryview)
     assert isinstance(v, memoryview)
+
     assert bytes(k) == b'a'
     assert bytes(v) == b'abc'
     k, v = next(zz)
@@ -344,3 +345,39 @@ def test_buffers():
     assert isinstance(v, memoryview)
     assert bytes(k) == b'b'
     assert bytes(v) == b'defg'
+
+
+def test_as_readonly():
+    db = Bigdict.new()
+    db['a'] = 3
+    db['b'] = 4
+    db.flush()
+    
+    def _worker(d):
+        assert d['a'] == 3
+        sleep(0.5)
+        try:
+            assert d['aa'] == 38
+        except KeyError:
+            pass
+        else:
+            raise Exception('should have raised KeyError')
+        sleep(0.3)
+        assert d['aa'] == 38
+
+    dbr = db.as_readonly()
+    worker = threading.Thread(target=_worker, args=(dbr,))
+    worker.start()
+
+    sleep(0.2)
+    db['aa'] = 38
+
+    sleep(0.5)
+    db.flush()
+    sleep(0.2)
+
+    worker.join()
+
+    with pytest.raises(ReadonlyError):
+        dbr['d'] = 9
+

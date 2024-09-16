@@ -91,7 +91,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self,
         path: str,
         *,
-        map_size_mb: int = 64,
+        map_size_mb: int = 1024,
         readonly: bool = True,
     ):
         """
@@ -142,7 +142,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         self._map_size_mb = map_size_mb
         self._readonly = readonly
-        self._dbs = {}
+        self._dbs = {'refcount': 1, 'dbs': {}}
         self._transactions = {}
 
         self._write_commit_interval = 100_000
@@ -171,6 +171,37 @@ class Bigdict(MutableMapping, Generic[ValType]):
     def readonly(self) -> bool:
         return self._readonly
 
+    def as_readonly(self):
+        if self.readonly:
+            return self
+        obj = self.__class__(self.path, map_size_mb=self.map_size_mb, readonly=True)
+        self._dbs['refcount'] += 1
+        obj._dbs = self._dbs
+        return obj
+
+        # Example use case:
+        # Say in one process there are two threads A and B.
+        # In A we need to write to a db; in B we need to read the same db.
+        # If we create two independent `Bigdict` objects in threads A and B,
+        # even if the one in B is "readonly", there will be issues because
+        # we're not supposed to open the same db with overlapping lifetimes
+        # __in one process__---there will be lock issues.
+        #
+        # Ref: search for error "MDB_BAD_RSLOT: Invalid reuse of reader locktable slot".
+        # https://stackoverflow.com/questions/56905502/lmdb-badrsloterror-mdb-txn-begin-mdb-bad-rslot-invalid-reuse-of-reader-lockta
+        #
+        # One solution is:
+        # In thread A, create
+        #    db1 = Bigdict(..., readonly=False)
+        # 
+        # then,
+        #    db2 = db1.as_readonly()
+        #
+        # then pass `db2` into thread `B` to be used there.
+        #
+        # B won't see data written in A but not yet committed, because the two
+        # Bigdict objects do not share transactions.
+
     @property
     def map_size_mb(self) -> int:
         return self._map_size_mb
@@ -195,16 +226,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
             (type(self), self.path, self.map_size_mb),
         )
 
-    def as_readonly(self):
-        if self.readonly:
-            return self
-        return self.__class__(self.path, map_size_mb=self.map_size_mb, readonly=True)
-
-    def as_readwrite(self):
-        if not self.readonly:
-            return self
-        return self.__class__(self.path, map_size_mb=self.map_size_mb, readonly=False)
-
     @staticmethod
     def _close(path, info, dbs, transactions, readonly):
         for t in transactions.values():
@@ -214,9 +235,15 @@ class Bigdict(MutableMapping, Generic[ValType]):
                 t.commit()
         transactions.clear()
 
-        for d in dbs.values():
-            d.close()
-        dbs.clear()
+        if not readonly:
+            for db in dbs['dbs'].values():
+                db.sync(True)
+
+        dbs['refcount'] -= 1
+        if dbs['refcount'] == 0:
+            for d in dbs['dbs'].values():
+                d.close()
+            dbs['dbs'].clear()
 
         if not readonly:
             try:
@@ -282,37 +309,49 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return str(base)
         raise ValueError(f'storage-version {sv}')
 
-    def _env(self, shard: str, *, readonly=None, **config):
+    def _env(self, shard: str, **config):
         map_size = self.map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
-        if readonly:
-            db = lmdb.Environment(
-                os.path.join(self.path, 'db', shard),
-                create=False,
-                readonly=True,
-                subdir=True,
-                readahead=False,
-                map_size=map_size,
-                **config,
-            )
-        else:
-            os.makedirs(os.path.join(self.path, 'db', shard), exist_ok=True)
-            db = lmdb.Environment(
-                os.path.join(self.path, 'db', shard),
-                readonly=False,
-                subdir=True,
-                readahead=False,
-                map_size=map_size,
-                writemap=True,
-                map_async=True,
-                **config,
-            )
+        # if readonly:
+        #     db = lmdb.Environment(
+        #         os.path.join(self.path, 'db', shard),
+        #         create=False,
+        #         readonly=True,
+        #         subdir=True,
+        #         readahead=False,
+        #         map_size=map_size,
+        #         **config,
+        #     )
+        # else:
+        #     os.makedirs(os.path.join(self.path, 'db', shard), exist_ok=True)
+        #     db = lmdb.Environment(
+        #         os.path.join(self.path, 'db', shard),
+        #         readonly=False,
+        #         subdir=True,
+        #         readahead=False,
+        #         map_size=map_size,
+        #         writemap=True,
+        #         map_async=True,
+        #         **config,
+        #     )
+
+        os.makedirs(os.path.join(self.path, 'db', shard), exist_ok=True)
+        db = lmdb.Environment(
+            os.path.join(self.path, 'db', shard),
+            readonly=False,
+            subdir=True,
+            readahead=False,
+            map_size=map_size,
+            writemap=True,
+            map_async=True,
+            **config,
+        )
         return db
 
     def _db(self, shard: str = '0'):
-        db = self._dbs.get(shard, None)
+        db = self._dbs['dbs'].get(shard, None)
         if db is None:
-            db = self._env(shard, readonly=self.readonly)
-            self._dbs[shard] = db
+            db = self._env(shard)
+            self._dbs['dbs'][shard] = db
         return db
 
     def _transaction(self, shard: str = '0'):
@@ -326,7 +365,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
                     # (hence the object is presumably has just been garbage collected, or is being garbage
                     # collected). It seems that the other environment is closing (possibly it is touching lock file
                     # or something), and that interferes with the proper function of this object.
-                    db = self._dbs.pop(shard)
+                    db = self._dbs['dbs'].pop(shard)
                     db.close()
                     txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
                 else:
@@ -435,10 +474,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
         """
         self.commit()
         json.dump(self.info, open(os.path.join(self.path, 'info.json'), 'w'))
-        for db in self._dbs.values():
-            db.sync()
-            db.close()
-        self._dbs.clear()
+        for db in self._dbs['dbs'].values():
+            db.sync(True)
 
     def encode_key(self, k: KeyType) -> bytes:
         """
@@ -541,8 +578,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
         k = self.encode_key(key)
         shard = self._shard(k)
         try:
-            with self._db(shard).begin(buffers=True) as txn:
+            with self._db(shard).begin(write=(not self.readonly), buffers=True) as txn:
                 v = txn.get(k)
+                # TODO: does exiting the transaction invalidate the mem view?
+                # This is not tested.
         except lmdb.PageNoteFoundError:
             raise KeyError(key)
         if v is None:
@@ -657,11 +696,13 @@ class Bigdict(MutableMapping, Generic[ValType]):
         if self._num_pending_writes > 0:
             self.commit()
         for shard in self._shards():
-            with self._db(shard).begin(buffers=buffers) as txn:
-                if buffers:
+            if buffers:
+                with self._db(shard).begin(write=(not self.readonly), buffers=buffers) as txn:
+                    # TODO: is it possible to modify the yielded mem view? Not tested.
                     for v in txn.cursor().iternext(keys=False, values=True):
                         yield v
-                else:
+            else:
+                with self._db(shard).begin() as txn:
                     decoder = self.decode_value
                     for v in txn.cursor().iternext(keys=False, values=True):
                         yield decoder(v)
@@ -678,11 +719,13 @@ class Bigdict(MutableMapping, Generic[ValType]):
         if self._num_pending_writes > 0:
             self.commit()
         for shard in self._shards():
-            with self._db(shard).begin(buffers=buffers) as txn:
-                if buffers:
+            if buffers:
+                with self._db(shard).begin(buffers=buffers) as txn:
+                    # TODO: is it possible to modify the yielded mem view? Not tested.
                     for key, value in txn.cursor().iternext(keys=True, values=True):
                         yield key, value
-                else:
+            else:
+                with self._db(shard).begin() as txn:
                     decode_key = self.decode_key
                     decode_val = self.decode_value
                     for key, value in txn.cursor().iternext(keys=True, values=True):
@@ -757,9 +800,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
             x.abort()
         self._transactions.clear()
         self._num_pending_writes = 0
-        for x in self._dbs.values():
+        for x in self._dbs['dbs'].values():
             x.close()
-        self._dbs.clear()
+        self._dbs['dbs'].clear()
         shutil.rmtree(self.path, ignore_errors=True)
         try:
             delattr(self, 'info')
@@ -789,9 +832,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         self.flush()
 
-        for x in self._dbs.values():
-            x.close()
-        self._dbs.clear()
+        for d in self._dbs['dbs'].values():
+            d.close()
+        self._dbs['dbs'].clear()
         size_old = 0  # bytes
         size_new = 0  # bytes
 
@@ -810,7 +853,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
             db.copy(path_new, compact=True)
 
             try:
-                db_new = self._env(shard_new, readonly=True)
+                db_new = self._env(shard_new)
             except Exception:
                 shutil.rmtree(path_new)
                 db.close()
