@@ -37,6 +37,8 @@ test = [
     "pytablewriter",
     "lmdbm",
     "rich",
+    "Faker",
+    "zpz",
 ]
 
 
