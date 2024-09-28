@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [0.3.4] - 2024-09-28
+
+- More cleanup in `Bigdict.flush`.
+- New methods `as_readonly`.
+- `map_size_mb` default was increased from 64 to 1024.
+
+
 ## [0.3.3] - 2024-06-13
 
 - `get_buffer` commits in a read/write object if needed, so that user does not need to remember to commit after writes and before calling it.
