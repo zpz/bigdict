@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [0.3.4] - in progress
+## [0.3.4] - 2024-09-28
 
 - More cleanup in `Bigdict.flush`.
 - New methods `as_readonly`.
