@@ -244,7 +244,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         dbs['refcount'] -= 1
         if dbs['refcount'] == 0:
             for d in dbs['dbs'].values():
-                d.close()
+                d.__exit__()
             dbs['dbs'].clear()
 
         if not readonly:
