@@ -5,6 +5,7 @@
 
 
 - `Bigdict.__init__` gets new parameter `max_readers` with default 126.
+- Call `env.__enter__()` upon creation of a new Environment object.
 
 
 ## [0.3.4] - 2024-09-28

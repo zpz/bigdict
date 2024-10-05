@@ -465,7 +465,6 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         for x in self._transactions.values():
             x.commit()
-            x.__exit__()  # this may be redundant.
 
         # If `self._num_pending_writes == 0`, there can still be
         # transactions created by `__getitem__`, but they did not perform
