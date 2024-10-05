@@ -92,6 +92,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         path: str,
         *,
         map_size_mb: int = 1024,
+        max_readers: int = 126,
         readonly: bool = True,
     ):
         """
@@ -141,6 +142,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
             )
 
         self._map_size_mb = map_size_mb
+        self._max_readers = max_readers
         self._readonly = readonly
         self._dbs = {'refcount': 1, 'dbs': {}}
         self._transactions = {}
@@ -242,7 +244,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         dbs['refcount'] -= 1
         if dbs['refcount'] == 0:
             for d in dbs['dbs'].values():
-                d.close()
+                d.__exit__()
             dbs['dbs'].clear()
 
         if not readonly:
@@ -309,7 +311,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
             return str(base)
         raise ValueError(f'storage-version {sv}')
 
-    def _env(self, shard: str, **config):
+    def _env(self, shard: str):
         map_size = self.map_size_mb * 1048576  # 1048576 is 2**20, or 1 MB
         # if readonly:
         #     db = lmdb.Environment(
@@ -343,8 +345,9 @@ class Bigdict(MutableMapping, Generic[ValType]):
             map_size=map_size,
             writemap=True,
             map_async=True,
-            **config,
+            max_readers=self._max_readers,
         )
+        db.__enter__()
         return db
 
     def _db(self, shard: str = '0'):
@@ -366,7 +369,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
                     # collected). It seems that the other environment is closing (possibly it is touching lock file
                     # or something), and that interferes with the proper function of this object.
                     db = self._dbs['dbs'].pop(shard)
-                    db.close()
+                    db.__exit__()
                     txn = lmdb.Transaction(self._db(shard), write=not self.readonly)
                 else:
                     raise
@@ -445,14 +448,24 @@ class Bigdict(MutableMapping, Generic[ValType]):
         method calls (be it reading or writing) in the two threads do not use the same transaction. Indeed,
         to save yourself the trouble, do NOT pass a read/write object to another thread.
 
+        A read/write transaction may only be used from the thread it was created in.
+
+        A read-only transaction can move across threads, but it cannot be used concurrently from multiple threads.
+
         In a long writing session (meaning inserting a large number of entries), the design of using a living transaction
         without too frequent commits has very significant performance benefits.
+
+        Note that a Bigdict object that has just been created (via `.new`) or opened (via `__init__`) does not contain
+        any transaction yet. A transaction is created only when user starts read or write operations.
+        In fact, a new Bigdict object does not contain any LMDB object until the first read/write operation, hence
+        it's fine to pass such a new Bigdict object to another thread.
         """
         if self.readonly:
             raise ReadonlyError('commit: Permission denied')
 
         for x in self._transactions.values():
             x.commit()
+
         # If `self._num_pending_writes == 0`, there can still be
         # transactions created by `__getitem__`, but they did not perform
         # any write.

@@ -2,7 +2,7 @@
 Bigdict
 """
 
-__version__ = '0.3.4'
+__version__ = '0.3.5b1'
 
 from ._bigdict import Bigdict, ReadonlyError
 
