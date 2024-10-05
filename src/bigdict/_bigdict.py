@@ -451,7 +451,7 @@ class Bigdict(MutableMapping, Generic[ValType]):
         A read/write transaction may only be used from the thread it was created in.
 
         A read-only transaction can move across threads, but it cannot be used concurrently from multiple threads.
-    
+
         In a long writing session (meaning inserting a large number of entries), the design of using a living transaction
         without too frequent commits has very significant performance benefits.
 
