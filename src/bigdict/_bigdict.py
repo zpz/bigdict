@@ -156,10 +156,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
         self.close = Finalize(
             self,
             type(self)._close,
-            args=(self.path, self.info, self._dbs, self._transactions, self.readonly),
-            exitpriority=10,
+            args=(self._dbs, self._transactions),
+            exitpriority=1,
         )
-        # Because `self._dbs`, `self._transactions`, `self.info` are passed to the finalizer this way,
+        # Because `self._dbs`, `self._transactions` are passed to the finalizer this way,
         # do not re-assign these attributes, like
         #
         #   self._transactions = {}
@@ -229,40 +229,20 @@ class Bigdict(MutableMapping, Generic[ValType]):
         )
 
     @staticmethod
-    def _close(path, info, dbs, transactions, readonly):
+    def _close(dbs, transactions):
+        # This finalizer does NOT save user's uncommitted changes.
+        # That is the user's responsibility.
         for t in transactions.values():
-            if readonly:
-                t.abort()
-            else:
-                t.commit()
+            t.abort()
+            # Do not `commit`.
+            # That is user's responsibility.
         transactions.clear()
-
-        if not readonly:
-            for db in dbs['dbs'].values():
-                db.sync(True)
 
         dbs['refcount'] -= 1
         if dbs['refcount'] == 0:
             for d in dbs['dbs'].values():
                 d.__exit__()
             dbs['dbs'].clear()
-
-        if not readonly:
-            try:
-                json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
-            except FileNotFoundError as e:
-                if '/info.json' in str(e):
-                    # Could not find the 'info' file or folder;
-                    # could happen if this db has been "destroyed".
-                    pass
-                else:
-                    raise
-            # except NameError as e:
-            #     if str(e) == "name 'open' is not defined":
-            #         # Could happen during interpreter shutdown.
-            #         pass
-            #     else:
-            #         raise
 
     def _shards(self) -> list[str]:
         # Return existing shards.
@@ -484,6 +464,10 @@ class Bigdict(MutableMapping, Generic[ValType]):
 
         Do not call this after every write; instead, call this after a writing "session"
         to be sure all updates (including to `self.info`) are persisted.
+
+        It is user's responsibility to call `flush` or `commit` to persist any change
+        to the data. There is some "finalizer" code that does resource cleanup; it does NOT
+        promise to save user's uncommitted changes.
         """
         self.commit()
         json.dump(self.info, open(os.path.join(self.path, 'info.json'), 'w'))

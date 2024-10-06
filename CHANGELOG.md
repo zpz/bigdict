@@ -7,6 +7,7 @@
 - `Bigdict.__init__` gets new parameter `max_readers` with default 126.
 - Call `env.__enter__()` upon creation of a new Environment object. (Not sure this fixes anything,
   but low-level errors has been observed in corner cases.)
+- Finetuned the finalizer code, hoping to fix corner-case resource errors.
 
 
 ## [0.3.4] - 2024-09-28
