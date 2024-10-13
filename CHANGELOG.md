@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [0.3.5] - in progress
+## [0.3.5] - 2024-10-13
 
 
 - `Bigdict.__init__` gets new parameter `max_readers` with default 126.

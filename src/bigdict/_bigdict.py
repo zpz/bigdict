@@ -24,6 +24,8 @@ ValType = TypeVar('ValType')
 
 ReadonlyError = lmdb.ReadonlyError
 
+# TODO: accept pathlib.Path for `path`.
+
 
 # TODO: `Generic[KeyType, ValType]`
 # seems to require a newer Python version.
