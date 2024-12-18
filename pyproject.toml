@@ -22,6 +22,9 @@ classifiers = [
 dynamic = ['version', 'description']
 
 
+# On Mac, you may need to install `lmdb` separately with the env `LMDB_PURE=1`.
+
+
 [project.urls]
 Source = "https://github.com/zpz/bigdict"
 
