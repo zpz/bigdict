@@ -85,7 +85,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
         assert not os.path.isdir(path)
         os.makedirs(path)
 
-        json.dump(info, open(os.path.join(path, 'info.json'), 'w'))
+        with open(os.path.join(path, 'info.json'), 'w') as file:
+            json.dump(info, file)
         z = cls(path, readonly=False, **kwargs)
         return z
 
@@ -121,7 +122,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
         """
         self.path = os.path.abspath(path)
 
-        self.info = json.load(open(os.path.join(path, 'info.json'), 'r'))
+        with open(os.path.join(path, 'info.json'), 'r') as file:
+            self.info = json.load(file)
 
         self._storage_version = self.info.get('storage_version', 0)
         if self._storage_version == 0:
@@ -472,7 +474,8 @@ class Bigdict(MutableMapping, Generic[ValType]):
         promise to save user's uncommitted changes.
         """
         self.commit()
-        json.dump(self.info, open(os.path.join(self.path, 'info.json'), 'w'))
+        with open(os.path.join(self.path, 'info.json'), 'w') as file:
+            json.dump(self.info, file)
         for db in self._dbs['dbs'].values():
             db.sync(True)
 

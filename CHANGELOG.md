@@ -1,6 +1,11 @@
 # Changelog
 
 
+## [0.3.6] - 2024-12-17
+
+- Use context manager on files to prevent ResourceWarning.
+
+
 ## [0.3.5] - 2024-10-13
 
 
